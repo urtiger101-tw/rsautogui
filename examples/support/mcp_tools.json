@@ -1,0 +1,296 @@
+[
+  {
+    "name": "windows_list",
+    "description": "Enumerate visible Win32 windows, optionally filter titles case-insensitively. Returns scoped target references; invalidates previous references.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Optional title substring"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "window_control",
+    "description": "Direct Win32 window state/geometry control. Close posts WM_CLOSE, which may prompt to save; no force kill. All actions validate original HWND/process/thread identity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "inspect",
+            "activate",
+            "minimize",
+            "maximize",
+            "restore",
+            "show",
+            "hide",
+            "move",
+            "resize",
+            "close"
+          ]
+        },
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "target",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "capture",
+    "description": "Activate target and return a PNG image plus its primary-monitor physical coordinates. Captures visible screen pixels; not offscreen rendering.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "locate",
+    "description": "Activate target, find one image match in its visible primary-monitor region. Multiple/no matches are errors. Exact and confidence are mutually exclusive.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        },
+        "template": {
+          "type": "string",
+          "description": "Absolute local template image path"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.95
+        },
+        "exact": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 5
+        },
+        "scale": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 4,
+          "default": 1
+        }
+      },
+      "required": [
+        "target",
+        "template"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "click_image",
+    "description": "Recognize one image then recheck pixels, foreground and geometry before sending a real click. Inspect capture first; template must be distinctive.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        },
+        "template": {
+          "type": "string",
+          "description": "Absolute local template image path"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.95
+        },
+        "exact": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 5
+        },
+        "scale": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 4,
+          "default": 1
+        }
+      },
+      "required": [
+        "target",
+        "template"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "type_text",
+    "description": "Activate target and send Unicode text to the focused control. Rechecks foreground for every character. Partial text may be sent before cancellation/failure.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to enter; no shell evaluation",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "target",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "hotkey",
+    "description": "Activate target and send a chord, releasing all keys afterwards (e.g. [ctrl,a] or [enter]). Verify the focused control before input.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "minItems": 1,
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "target",
+        "keys"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "screensaver",
+    "description": "Read screensaver status, pause auto-start, resume or stop an active .scr saver. Pause restores on timer, resume or MCP disconnection. Does not unlock Windows or change password/lock policy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "status",
+            "pause",
+            "resume",
+            "stop"
+          ]
+        },
+        "seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "default": 900
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  }
+]

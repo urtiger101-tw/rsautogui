@@ -1,0 +1,4 @@
+interface:
+  display_name: "AutoGui Windows Control"
+  short_description: "Control Windows apps with screenshots, recognition and Win32"
+  default_prompt: "Use $autogui-control to inspect and operate the requested Windows application, then verify its actual result."

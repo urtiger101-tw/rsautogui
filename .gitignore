@@ -1,0 +1,33 @@
+/target/
+/dist/
+
+# Local agent sessions, prompts, evidence and recovery backups
+/.agent/
+/.agy-staff/
+/.sites-runtime/
+/.opencode/
+/GROK_BUILD_PROMPT.md
+
+# Machine-local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+credentials.json
+secrets.json
+**/.install/
+**/runtime.json
+
+# Editor/OS files
+/.idea/
+/.vscode/
+*.log
+*.tmp
+*.bak
+__pycache__/
+*.pyc
+Thumbs.db
+.DS_Store
