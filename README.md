@@ -1,8 +1,8 @@
-# RustPilot GUI
+# rsautogui
 
 Rust-powered Windows desktop automation for AI agents: image recognition, Win32 app control, an MCP server, and reusable Skills.
 
-RustPilot GUI 提供 Rust 原生桌面自動化，包含畫面辨識、Windows App 控制、MCP 與 Agent Skills。Rust library 的 crate 名稱維持 `autogui`，CLI 維持 `autogui-control`，以保留既有使用方式。
+rsautogui 提供 Rust 原生桌面自動化，包含畫面辨識、Windows App 控制、MCP 與 Agent Skills。Rust library 的 crate 名稱維持 `autogui`，CLI 維持 `autogui-control`，以保留既有使用方式。
 
 The `autogui` library is independently implemented in Rust and modeled on PyAutoGUI 0.9.x. It provides mouse and keyboard input, fail-safe handling, primary-screen capture, image matching, and Windows window control. This project is not affiliated with PyAutoGUI.
 
@@ -13,8 +13,8 @@ The `autogui` library is independently implemented in Rust and modeled on PyAuto
 發行包解壓縮後執行 `install.cmd`，可分別選擇安裝 **Skill** 與 **MCP** 給 Codex、Claude、OpenCode、AGY，也能只安裝程式或自訂 Skill 目錄。安裝器備份既有設定；解除安裝保護後續修改。不要將 EXE 與 DLL 分開移動。
 
 ```powershell
-git clone https://github.com/urtiger101-tw/rustpilot-gui.git
-cd rustpilot-gui
+git clone https://github.com/urtiger101-tw/rsautogui.git
+cd rsautogui
 cargo build --release --workspace --all-features --locked
 .\target\release\autogui-control.exe --help
 .\target\release\autogui-control.exe mcp
@@ -27,7 +27,7 @@ MCP 提供 8 個工具，涵蓋視窗列舉、Win32 控制、PNG 畫面、找圖
 
 ```toml
 [dependencies]
-autogui = { path = "../rustpilot-gui", features = ["opencv"] }
+autogui = { path = "../rsautogui", features = ["opencv"] }
 ```
 
 The default `os` feature uses Enigo for real input and XCap for screen capture. For deterministic, headless code, construct `AutoGui::with_fake(FakeBackend::new(width, height))`. Building with `default-features = false` also selects the fake backend.
