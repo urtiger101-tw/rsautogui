@@ -10,6 +10,9 @@ use std::sync::{
 };
 
 pub(crate) const NAMES: &[&str] = &[
+    "displays_list",
+    "display_capture",
+    "window_to_display",
     "windows_list",
     "window_control",
     "capture",

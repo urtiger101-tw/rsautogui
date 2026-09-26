@@ -1,6 +1,6 @@
 # 畫面辨識與 Windows App 控制
 
-本專案提供 Rust library 和 `app_control` 命令列範例。控制目標需要在主螢幕可見，並且 Windows 已登入、解除鎖定。標題查詢會使用不分大小寫的子字串；符合多個視窗時會列出候選並停止。
+本專案提供 Rust library 和 `app_control` 命令列範例。控制目標需要在選定螢幕可見，並且 Windows 已登入、解除鎖定。預設主螢幕；`capture/locate/click` 可在最後加 `--display <完整裝置名稱>`，詳見 [虛擬與實體顯示器](virtual-display.md)。標題查詢會使用不分大小寫的子字串；符合多個視窗時會列出候選並停止。
 
 螢幕保護程式阻擋桌面時，可先使用 `app_control screensaver stop`。自動化期間可另開終端執行 `app_control screensaver pause 900` 暫停自動啟動；完整說明見 [螢幕保護程式控制](screensaver.md)。
 

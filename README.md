@@ -21,7 +21,19 @@ cargo build --release --workspace --all-features --locked
 .\scripts\package.ps1 -SkipBuild
 ```
 
-MCP 提供 8 個工具，涵蓋視窗列舉、Win32 控制、PNG 畫面、找圖、點擊、文字、快捷鍵與螢幕保護程式。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
+MCP 提供 11 個工具，涵蓋顯示器／視窗列舉、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、文字、快捷鍵與螢幕保護程式。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
+
+## 虛擬顯示器
+
+可搭配選配的 Windows IDD 驅動，讓 Windows 建立真正的延伸顯示器，再由 rsautogui 擷取其中的 App 畫面。新增 `display list/capture/move`、MCP `displays_list`／`display_capture`／`window_to_display`，以及 `capture`／`locate`／`click` 的 `--display` 選項。既有命令預設仍使用主螢幕。
+
+```powershell
+.\target\release\autogui-control.exe display list
+# 裝置名稱請取自上面的實際輸出
+.\target\release\autogui-control.exe display capture '\\.\DISPLAY2' virtual.png
+```
+
+驅動獨立下載與安裝，不增加主程式依賴；準備工具固定版本、核對 SHA-256 與簽章，預設一個 1920×1080、60 Hz 顯示器。驅動安裝需要系統管理員；虛擬螢幕與實體螢幕共用鍵盤、滑鼠與焦點。詳見 [虛擬顯示器設定與使用](docs/virtual-display.md)。
 
 ## Install
 

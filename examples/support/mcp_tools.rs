@@ -1,5 +1,8 @@
-use super::{active, locate_target, scaled_template, screen_region, window_command};
-use autogui::{AutoGui, Error, LocateOptions, Rect, Result, Window};
+use super::{
+    active, capture_region, display_command, locate_target, scaled_template, screen_region,
+    window_command,
+};
+use autogui::{AutoGui, Display, Error, LocateOptions, Rect, Result, Screenshot, Window};
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,6 +16,25 @@ fn text(value: Value) -> Value {
 }
 fn rect(rect: Rect) -> Value {
     json!({"left":rect.left,"top":rect.top,"width":rect.width,"height":rect.height})
+}
+fn display_info(display: &Display) -> Value {
+    json!({"device_name":display.name(),"friendly_name":display.friendly_name(),"id":display.id(),"rect":rect(display.bounds()),"primary":display.is_primary(),"coordinates":"windows desktop physical pixels"})
+}
+fn png(frame: Screenshot, metadata: Value) -> Result<Value> {
+    let rgb = image::RgbImage::from_raw(frame.width, frame.height, frame.pixels)
+        .ok_or(Error::InvalidArgument("invalid frame"))?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    rgb.write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|e| Error::Screenshot(e.to_string()))?;
+    if bytes.get_ref().len() > 12 * 1024 * 1024 {
+        return Err(Error::InvalidArgument(
+            "PNG exceeds 12 MiB; request a smaller region",
+        ));
+    }
+    Ok(
+        json!({"content":[{"type":"text","text":metadata.to_string()},
+        {"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())}],"isError":false}),
+    )
 }
 fn info(window: &Window) -> Result<Value> {
     Ok(
@@ -33,6 +55,30 @@ struct List {
 #[serde(deny_unknown_fields)]
 struct Target {
     target: String,
+    display: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Empty {}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureRect {
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplayCapture {
+    display: String,
+    region: Option<CaptureRect>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplayMove {
+    target: String,
+    display: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +94,7 @@ struct Control {
 #[serde(deny_unknown_fields)]
 struct Search {
     target: String,
+    display: Option<String>,
     template: String,
     confidence: Option<f64>,
     exact: Option<bool>,
@@ -78,6 +125,8 @@ pub(crate) struct Session {
     gui: Option<AutoGui>,
     targets: HashMap<String, Window>,
     generation: u64,
+    displays: HashMap<String, Display>,
+    display_generation: u64,
     pause: Option<PauseLease>,
 }
 
@@ -105,6 +154,13 @@ impl Session {
         window.title()?; // validates captured HWND plus originating process/thread identity
         Ok(window.clone())
     }
+    fn display(&self, key: &str) -> Result<Display> {
+        let display = self.displays.get(key).ok_or(Error::InvalidArgument(
+            "unknown/stale display; call displays_list again",
+        ))?;
+        display.validate()?;
+        Ok(display.clone())
+    }
     pub(crate) fn call(
         &mut self,
         name: &str,
@@ -112,6 +168,62 @@ impl Session {
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Value> {
         match name {
+            "displays_list" => {
+                let _: Empty = decode(args)?;
+                let displays = Display::all()?;
+                self.display_generation = self
+                    .display_generation
+                    .checked_add(1)
+                    .ok_or(Error::InvalidArgument("restart session"))?;
+                self.displays.clear();
+                let mut results = Vec::new();
+                for (index, display) in displays.into_iter().enumerate() {
+                    check()?;
+                    let key = format!("d{}-{index}", self.display_generation);
+                    let mut detail = display_info(&display);
+                    detail["display"] = json!(key);
+                    self.displays.insert(key, display);
+                    results.push(detail);
+                }
+                Ok(text(
+                    json!({"displays":results,"note":"Physical and IDD virtual monitors share the Windows input desktop. Re-enumerate after changing display topology."}),
+                ))
+            }
+            "display_capture" => {
+                let a: DisplayCapture = decode(args)?;
+                let display = self.display(&a.display)?;
+                let region = a
+                    .region
+                    .map(|r| Rect::new(r.left, r.top, r.width, r.height))
+                    .unwrap_or(display.bounds());
+                if region.width <= 0
+                    || region.height <= 0
+                    || i64::from(region.width) * i64::from(region.height) > 16_777_216
+                {
+                    return Err(Error::InvalidArgument(
+                        "capture region must be positive and at most 16 megapixels",
+                    ));
+                }
+                check()?;
+                let frame = self.gui()?.screenshot_display_region(&display, region)?;
+                check()?;
+                png(
+                    frame,
+                    json!({"display":a.display,"device_name":display.name(),"region":rect(region),"coordinates":"windows desktop physical pixels"}),
+                )
+            }
+            "window_to_display" => {
+                let a: DisplayMove = decode(args)?;
+                let display = self.display(&a.display)?;
+                let window = self.target(&a.target)?;
+                let previous = info(&window)?;
+                check()?;
+                display_command::move_window(&window, &display, check)?;
+                check()?;
+                Ok(text(
+                    json!({"target":a.target,"display":a.display,"previous":previous,"current":info(&window)?}),
+                ))
+            }
             "windows_list" => {
                 let args: List = decode(args)?;
                 let windows = if let Some(title) = args.title {
@@ -141,7 +253,7 @@ impl Session {
                     results.push(detail);
                 }
                 Ok(text(
-                    json!({"windows":results,"coordinates":"primary monitor physical pixels"}),
+                    json!({"windows":results,"coordinates":"windows desktop physical pixels; origin at primary top-left"}),
                 ))
             }
             "window_control" => {
@@ -177,39 +289,41 @@ impl Session {
             }
             "capture" => {
                 let a: Target = decode(args)?;
+                let display = a
+                    .display
+                    .as_deref()
+                    .map(|key| self.display(key))
+                    .transpose()?;
                 let window = self.target(&a.target)?;
                 check()?;
                 window.activate()?;
                 active(&window)?;
                 let bounds = window.box_rect()?;
                 check()?;
-                let region = screen_region(self.gui()?, &window)?;
+                let region = screen_region(self.gui()?, &window, display.as_ref())?;
                 if i64::from(region.width) * i64::from(region.height) > 16_777_216 {
                     return Err(Error::InvalidArgument(
                         "capture exceeds 16 megapixels; resize window",
                     ));
                 }
-                let frame = self.gui()?.screenshot_region(region)?;
+                let frame = capture_region(self.gui()?, display.as_ref(), region)?;
                 active(&window)?;
                 if bounds != window.box_rect()? {
                     return Err(Error::InvalidArgument("window moved during capture; retry"));
                 }
                 check()?;
-                let rgb = image::RgbImage::from_raw(frame.width, frame.height, frame.pixels)
-                    .ok_or(Error::InvalidArgument("invalid frame"))?;
-                let mut bytes = std::io::Cursor::new(Vec::new());
-                rgb.write_to(&mut bytes, image::ImageFormat::Png)
-                    .map_err(|e| Error::Screenshot(e.to_string()))?;
-                if bytes.get_ref().len() > 12 * 1024 * 1024 {
-                    return Err(Error::InvalidArgument("PNG exceeds 12 MiB; resize window"));
-                }
-                Ok(
-                    json!({"content":[{"type":"text","text":json!({"target":a.target,"region":rect(region)}).to_string()},
-                    {"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())}],"isError":false}),
+                png(
+                    frame,
+                    json!({"target":a.target,"display":a.display,"region":rect(region),"coordinates":"windows desktop physical pixels"}),
                 )
             }
             "locate" | "click_image" => {
                 let a: Search = decode(args)?;
+                let display = a
+                    .display
+                    .as_deref()
+                    .map(|key| self.display(key))
+                    .transpose()?;
                 let timeout = a.timeout.unwrap_or(5.0);
                 if !(0.0..=30.0).contains(&timeout) {
                     return Err(Error::InvalidArgument("timeout must be 0..30 seconds"));
@@ -253,11 +367,12 @@ impl Session {
                     &needle,
                     confidence,
                     Duration::from_secs_f64(timeout),
+                    display.as_ref(),
                     check,
                 )?;
                 let point = autogui::center(found);
                 if name == "click_image" {
-                    let frame = gui.screenshot_region(found)?;
+                    let frame = capture_region(gui, display.as_ref(), found)?;
                     gui.locate(
                         &needle,
                         &frame,
@@ -271,10 +386,23 @@ impl Session {
                     if window.box_rect()? != bounds {
                         return Err(Error::InvalidArgument("window moved; retry recognition"));
                     }
-                    gui.click_xy(point.x, point.y)?;
+                    if let Some(display) = &display {
+                        gui.move_to_display(display, point)?;
+                        check()?;
+                        active(&window)?;
+                        display.validate()?;
+                        if window.box_rect()? != bounds || gui.position()? != point {
+                            return Err(Error::InvalidArgument(
+                                "target or cursor moved before click; retry recognition",
+                            ));
+                        }
+                        gui.click()?;
+                    } else {
+                        gui.click_xy(point.x, point.y)?;
+                    }
                 }
                 Ok(text(
-                    json!({"rect":rect(found),"center":{"x":point.x,"y":point.y},"clicked":name=="click_image"}),
+                    json!({"rect":rect(found),"center":{"x":point.x,"y":point.y},"clicked":name=="click_image","display":a.display,"coordinates":"windows desktop physical pixels"}),
                 ))
             }
             "type_text" => {

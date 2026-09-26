@@ -577,3 +577,250 @@ fn recognizes_and_controls_own_native_app() {
     assert!(matches!(window.activate(), Err(Error::WindowNotFound)));
     // Fixture Drop joins its GUI thread and never closes another application's window.
 }
+
+#[cfg(feature = "agent")]
+#[test]
+#[ignore = "requires AUTOGUI_LIVE=1, AUTOGUI_DISPLAY and AUTOGUI_MCP_EXE; real input only to its own fixture"]
+fn controls_own_app_on_selected_display() {
+    use autogui::Display;
+    use base64::Engine;
+    use serde_json::json;
+    assert_eq!(std::env::var("AUTOGUI_LIVE").ok().as_deref(), Some("1"));
+    let name = std::env::var("AUTOGUI_DISPLAY").expect("select an explicit non-primary display");
+    let executable = std::env::var("AUTOGUI_MCP_EXE").expect("provide a built CLI/MCP executable");
+    let _caller_dpi = DpiScope::set(DPI_AWARENESS_CONTEXT_UNAWARE);
+    let display = Display::all()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.name() == name)
+        .unwrap();
+    assert!(
+        !display.is_primary(),
+        "this fixture verifies a secondary display"
+    );
+    let bounds = display.bounds();
+    let mut gui = AutoGui::new().unwrap();
+    gui.settings_mut().pause = Duration::from_millis(10);
+    let pointer = gui.position().unwrap();
+    assert!(!gui.settings().failsafe_points.contains(&pointer));
+    let title = format!("rsautogui virtual display fixture {}", std::process::id());
+    let fixture = Fixture::open(&title, pointer);
+    let window = gui.get_windows_with_title(&title).unwrap().remove(0);
+    window.resize_to(640, 480).unwrap();
+    let command = |args: &[&str]| {
+        let result = std::process::Command::new(&executable)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        println!("{}", String::from_utf8_lossy(&result.stdout).trim());
+    };
+    command(&["display", "move", &name, &title]);
+    let region = window.box_rect().unwrap();
+    assert_eq!(region.intersect(&bounds), Some(region));
+    assert_eq!(region, native_rect(fixture.handles.window));
+    window.activate().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    // Real SendInput quantization, including edge pixels, from an unaware caller.
+    for x in [
+        bounds.left,
+        bounds.left + 1,
+        bounds.left + bounds.width / 2,
+        bounds.left + bounds.width - 2,
+        bounds.left + bounds.width - 1,
+    ] {
+        for y in [
+            bounds.top,
+            bounds.top + 1,
+            bounds.top + bounds.height / 2,
+            bounds.top + bounds.height - 2,
+            bounds.top + bounds.height - 1,
+        ] {
+            let point = Point::new(x, y);
+            assert!(!gui.settings().failsafe_points.contains(&point));
+            println!("Checking virtual display cursor {point:?}");
+            gui.move_to_display(&display, point).unwrap();
+            assert_eq!(gui.position().unwrap(), point);
+        }
+    }
+    let button = native_rect(fixture.handles.button);
+    let template = gui.screenshot_display_region(&display, button).unwrap();
+    assert!(
+        template
+            .pixels
+            .chunks_exact(3)
+            .any(|p| p != &template.pixels[..3])
+    );
+    let template_path = std::env::temp_dir().join(format!(
+        "rsautogui-display-button-{}.png",
+        std::process::id()
+    ));
+    let _temp = TempFile(template_path.clone());
+    template.save(&template_path).unwrap();
+    command(&[
+        "locate",
+        &title,
+        template_path.to_str().unwrap(),
+        "0.98",
+        "2",
+        "1",
+        "--display",
+        &name,
+    ]);
+    command(&[
+        "click",
+        &title,
+        template_path.to_str().unwrap(),
+        "0.98",
+        "2",
+        "1",
+        "--display",
+        &name,
+    ]);
+    {
+        let _dpi = DpiScope::set(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let point = gui.position().unwrap();
+        let hit = unsafe {
+            WindowFromPoint(windows_sys::Win32::Foundation::POINT {
+                x: point.x,
+                y: point.y,
+            })
+        };
+        println!(
+            "After CLI: cursor={point:?}, button={:?}, button HWND={}, hit HWND={}, received={}",
+            native_rect(fixture.handles.button),
+            fixture.handles.button,
+            hit as isize,
+            fixture.clicks.load(Ordering::SeqCst)
+        );
+        if let Ok(directory) = std::env::var("AUTOGUI_EVIDENCE_DIR") {
+            std::fs::create_dir_all(&directory).unwrap();
+            gui.screenshot_display_region(&display, window.box_rect().unwrap())
+                .unwrap()
+                .save(std::path::Path::new(&directory).join("after-cli.png"))
+                .unwrap();
+        }
+    }
+    wait_until(|| fixture.clicks.load(Ordering::SeqCst) == 1);
+
+    let mut client = mcp_client::Client::start(&executable);
+    let list = client.tool("displays_list", json!({}));
+    let selected = list["displays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["device_name"] == name)
+        .unwrap()["display"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let windows = client.tool("windows_list", json!({"title":title}));
+    assert_eq!(windows["windows"].as_array().unwrap().len(), 1);
+    let target = windows["windows"][0]["target"].as_str().unwrap().to_owned();
+    // Exercise movement from the primary display through MCP, independently of CLI.
+    window.move_to(220, 180).unwrap();
+    client.tool(
+        "window_to_display",
+        json!({"target":target,"display":selected}),
+    );
+    assert_eq!(
+        window.box_rect().unwrap().intersect(&bounds),
+        Some(window.box_rect().unwrap())
+    );
+    let captured = client.raw_tool("capture", json!({"target":target,"display":selected}));
+    assert_eq!(captured["isError"], false, "{captured}");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(captured["content"][1]["data"].as_str().unwrap())
+        .unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (640, 480));
+    assert_eq!(
+        client.raw_tool("capture", json!({"target":target}))["isError"],
+        true,
+        "default primary capture must not silently select another display"
+    );
+    assert_eq!(client.raw_tool("display_capture", json!({"display":selected,"region":{"left":bounds.left-1,"top":bounds.top,"width":2,"height":2}}))["isError"], true);
+    // Focus and a move across different DPI monitors can change button pixels.
+    // Observe the current control instead of treating an earlier frame as current.
+    gui.move_to_display(
+        &display,
+        Point::new(
+            bounds.left + bounds.width - 2,
+            bounds.top + bounds.height - 2,
+        ),
+    )
+    .unwrap();
+    gui.screenshot_display_region(&display, native_rect(fixture.handles.button))
+        .unwrap()
+        .save(&template_path)
+        .unwrap();
+    client.tool("locate", json!({"target":target,"display":selected,"template":template_path,"confidence":0.98,"timeout":2}));
+    client.tool("click_image", json!({"target":target,"display":selected,"template":template_path,"confidence":0.98,"timeout":2}));
+    wait_until(|| fixture.clicks.load(Ordering::SeqCst) == 2);
+    gui.click_display(&display, autogui::center(native_rect(fixture.handles.edit)))
+        .unwrap();
+    client.tool(
+        "type_text",
+        json!({"target":target,"text":"虛擬螢幕截圖與 MCP 點擊驗證完成"}),
+    );
+    wait_until(|| native_text(fixture.handles.edit) == "虛擬螢幕截圖與 MCP 點擊驗證完成");
+    let full = client.raw_tool("display_capture", json!({"display":selected}));
+    assert_eq!(full["isError"], false, "{full}");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(full["content"][1]["data"].as_str().unwrap())
+        .unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!(
+        (image.width(), image.height()),
+        (bounds.width as u32, bounds.height as u32)
+    );
+    if let Ok(directory) = std::env::var("AUTOGUI_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::path::Path::new(&directory);
+        std::fs::write(directory.join("virtual-display-mcp.png"), &bytes).unwrap();
+        gui.screenshot_display_region(&display, window.box_rect().unwrap())
+            .unwrap()
+            .save(directory.join("virtual-display-app.png"))
+            .unwrap();
+        template
+            .save(directory.join("virtual-display-button.png"))
+            .unwrap();
+        command(&[
+            "display",
+            "capture",
+            &name,
+            directory.join("virtual-display-cli.png").to_str().unwrap(),
+        ]);
+        std::fs::write(directory.join("result.json"), serde_json::to_vec_pretty(&json!({
+            "status":"PASS", "device":name, "bounds":{"left":bounds.left,"top":bounds.top,"width":bounds.width,"height":bounds.height},
+            "cursor_points_verified":25, "button_clicks_received":fixture.clicks.load(Ordering::SeqCst),
+            "text_received":native_text(fixture.handles.edit), "interfaces":["library","CLI","MCP"]
+        })).unwrap()).unwrap();
+    }
+    client.tool("displays_list", json!({}));
+    assert_eq!(
+        client.raw_tool("display_capture", json!({"display":selected}))["isError"],
+        true
+    );
+    // Display references and window references have separate lifetimes.
+    client.tool(
+        "window_control",
+        json!({"target":target,"action":"inspect"}),
+    );
+    assert_ne!(
+        unsafe {
+            AreDpiAwarenessContextsEqual(
+                GetThreadDpiAwarenessContext(),
+                DPI_AWARENESS_CONTEXT_UNAWARE,
+            )
+        },
+        0
+    );
+    println!(
+        "PASS selected display: real pixels, 25 exact cursor positions, CLI/MCP clicks received, Unicode input, stale refs, bounds rejection and primary default preserved"
+    );
+}

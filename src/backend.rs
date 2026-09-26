@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 pub trait Backend {
     fn mouse_pos(&self) -> Result<Point>;
     fn move_mouse(&mut self, p: Point) -> Result<()>;
+    fn move_mouse_desktop(&mut self, p: Point) -> Result<()> {
+        self.move_mouse(p)
+    }
     fn button(&mut self, b: MouseButton, down: bool) -> Result<()>;
     fn scroll(&mut self, dy: i32, dx: i32) -> Result<()>;
     fn key(&mut self, key: &str, down: bool) -> Result<()>;
@@ -147,6 +150,18 @@ impl OsBackend {
 
 #[cfg(feature = "os")]
 impl Backend for OsBackend {
+    fn move_mouse_desktop(&mut self, p: Point) -> Result<()> {
+        #[cfg(windows)]
+        {
+            crate::display::move_cursor(p)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = p;
+            Err(Error::UnsupportedPlatform)
+        }
+    }
+
     fn mouse_pos(&self) -> Result<Point> {
         #[cfg(windows)]
         {

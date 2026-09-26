@@ -1,7 +1,9 @@
 //! Operate one explicitly selected Windows window. `click` and `type` send real input.
-use autogui::{AutoGui, Error, LocateOptions, Point, Rect, Screenshot, Window};
+use autogui::{AutoGui, Display, Error, LocateOptions, Point, Rect, Screenshot, Window};
 use std::time::{Duration, Instant};
 
+#[path = "support/display_command.rs"]
+mod display_command;
 #[cfg(feature = "agent")]
 #[path = "support/mcp.rs"]
 mod mcp;
@@ -56,14 +58,35 @@ fn active(window: &Window) -> autogui::Result<()> {
     Ok(())
 }
 
-fn screen_region(gui: &AutoGui, window: &Window) -> autogui::Result<Rect> {
-    let size = gui.size()?;
+fn screen_region(
+    gui: &AutoGui,
+    window: &Window,
+    display: Option<&Display>,
+) -> autogui::Result<Rect> {
+    let bounds = if let Some(display) = display {
+        display.validate()?;
+        display.bounds()
+    } else {
+        let size = gui.size()?;
+        Rect::new(0, 0, size.width, size.height)
+    };
     window
         .box_rect()?
-        .intersect(&Rect::new(0, 0, size.width, size.height))
+        .intersect(&bounds)
         .ok_or(Error::InvalidArgument(
-            "target window is outside the primary monitor",
+            "target window is outside the selected display (default: primary)",
         ))
+}
+
+fn capture_region(
+    gui: &mut AutoGui,
+    display: Option<&Display>,
+    region: Rect,
+) -> autogui::Result<Screenshot> {
+    match display {
+        Some(display) => gui.screenshot_display_region(display, region),
+        None => gui.screenshot_region(region),
+    }
 }
 
 fn scaled_template(path: &str, scale: f64) -> autogui::Result<Screenshot> {
@@ -89,6 +112,7 @@ fn locate_target(
     needle: &Screenshot,
     confidence: Option<f32>,
     timeout: Duration,
+    display: Option<&Display>,
     check_cancelled: &dyn Fn() -> autogui::Result<()>,
 ) -> autogui::Result<(Rect, Rect)> {
     let start = Instant::now();
@@ -97,8 +121,8 @@ fn locate_target(
         check_cancelled()?;
         active(window)?;
         let window_rect = window.box_rect()?;
-        let region = screen_region(gui, window)?;
-        let frame = gui.screenshot_region(region)?;
+        let region = screen_region(gui, window, display)?;
+        let frame = capture_region(gui, display, region)?;
         let options = LocateOptions {
             confidence,
             ..Default::default()
@@ -130,7 +154,7 @@ fn locate_target(
 }
 
 fn run() -> autogui::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args[0] == "--help" {
         println!(
             "用法：app_control list [標題]\n      app_control capture <標題> <output.png>\n      app_control locate <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control click <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control type <標題> <文字>\n\n標題使用不分大小寫的子字串；必須只符合一個視窗。\n預設 confidence=0.95、timeout=5、scale=1。\ncapture／locate／click／type 會啟用目標視窗；click／type 送出真實輸入。\n把游標移到主螢幕角落可中止。相似度模式需 --features opencv。 "
@@ -141,6 +165,9 @@ fn run() -> autogui::Result<()> {
         println!(
             "\nWin32 控制：app_control window <inspect|activate|minimize|maximize|restore|hide|show|move|resize|close> <標題> [x y|width height]\nAgent：autogui-control mcp（stdio MCP server；需 agent feature）"
         );
+        println!(
+            "\n顯示器：app_control display list\n        app_control display capture <裝置名稱> <output.png>\n        app_control display move <裝置名稱> <唯一視窗標題>\ncapture／locate／click 可在最後附加 --display <裝置名稱>。顯示器座標為 Windows 桌面實體像素，可為負數。虛擬顯示器需另外安裝 IDD 驅動；所有螢幕共用焦點與滑鼠。"
+        );
         return Ok(());
     }
     #[cfg(feature = "agent")]
@@ -150,6 +177,30 @@ fn run() -> autogui::Result<()> {
     if args[0] == "window" {
         return window_command::run(&args[1..]);
     }
+    if args[0] == "display" {
+        return display_command::run(&args[1..]);
+    }
+    let display = if matches!(args[0].as_str(), "capture" | "locate" | "click") {
+        if let Some(index) = args
+            .iter()
+            .enumerate()
+            .skip(3)
+            .find_map(|(i, s)| (s == "--display").then_some(i))
+        {
+            if index + 2 != args.len() {
+                return Err(Error::InvalidArgument(
+                    "--display <exact device name> must be the final option",
+                ));
+            }
+            let display = display_command::select(&args[index + 1])?;
+            args.truncate(index);
+            Some(display)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let command = args[0].as_str();
     if !["list", "capture", "locate", "click", "type", "screensaver"].contains(&command) {
         return Err(Error::InvalidArgument("unknown command; use --help"));
@@ -219,8 +270,8 @@ fn run() -> autogui::Result<()> {
     active(&window)?;
     match command {
         "capture" => {
-            gui.screenshot_region(screen_region(&gui, &window)?)?
-                .save(&args[2])?;
+            let region = screen_region(&gui, &window, display.as_ref())?;
+            capture_region(&mut gui, display.as_ref(), region)?.save(&args[2])?;
             println!("已儲存 {}", args[2]);
         }
         "type" => {
@@ -233,13 +284,20 @@ fn run() -> autogui::Result<()> {
         "locate" | "click" => {
             let (needle, confidence, timeout) =
                 prepared.ok_or(Error::InvalidArgument("missing search options"))?;
-            let (found, captured_window) =
-                locate_target(&mut gui, &window, &needle, confidence, timeout, &|| Ok(()))?;
+            let (found, captured_window) = locate_target(
+                &mut gui,
+                &window,
+                &needle,
+                confidence,
+                timeout,
+                display.as_ref(),
+                &|| Ok(()),
+            )?;
             let point: Point = autogui::center(found);
             if command == "click" {
                 // Check the pixels and target immediately before dispatch. A
                 // moving window, replaced control, or lost focus aborts input.
-                let fresh = gui.screenshot_region(found)?;
+                let fresh = capture_region(&mut gui, display.as_ref(), found)?;
                 gui.locate(
                     &needle,
                     &fresh,
@@ -254,7 +312,19 @@ fn run() -> autogui::Result<()> {
                         "target window moved; retry recognition",
                     ));
                 }
-                gui.click_xy(point.x, point.y)?;
+                if let Some(display) = &display {
+                    gui.move_to_display(display, point)?;
+                    active(&window)?;
+                    display.validate()?;
+                    if window.box_rect()? != captured_window || gui.position()? != point {
+                        return Err(Error::InvalidArgument(
+                            "target or cursor moved before click; retry recognition",
+                        ));
+                    }
+                    gui.click()?;
+                } else {
+                    gui.click_xy(point.x, point.y)?;
+                }
             }
             println!(
                 "{} {:?}, center {:?}, window {}",

@@ -1,5 +1,98 @@
 [
   {
+    "name": "displays_list",
+    "description": "Enumerate active Windows displays, including IDD virtual monitors. Returns connection-scoped display references, device names and physical desktop bounds. Re-list invalidates old display references. Does not install or enable a driver.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "display_capture",
+    "description": "Capture a real PNG from a selected physical or IDD virtual display without activating a window. Default is the full display. A supplied region uses global desktop physical pixels and must fit entirely inside it; at most 16 megapixels.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "display": {
+          "type": "string",
+          "description": "Fresh display reference from displays_list."
+        },
+        "region": {
+          "type": "object",
+          "properties": {
+            "left": {
+              "type": "integer"
+            },
+            "top": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "left",
+            "top",
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "display"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "window_to_display",
+    "description": "Restore a minimized/maximized target, then move it 16 pixels inside a selected display and shrink it if needed. Uses real Win32 actions; returns previous and current geometry. Partial changes may remain if the app rejects resizing. Shared Windows focus/cursor; not a separate session.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Fresh window target from windows_list."
+        },
+        "display": {
+          "type": "string",
+          "description": "Fresh display reference from displays_list."
+        }
+      },
+      "required": [
+        "target",
+        "display"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "windows_list",
     "description": "Enumerate visible Win32 windows, optionally filter titles case-insensitively. Returns scoped target references; invalidates previous references.",
     "inputSchema": {
@@ -75,13 +168,17 @@
   },
   {
     "name": "capture",
-    "description": "Activate target and return a PNG image plus its primary-monitor physical coordinates. Captures visible screen pixels; not offscreen rendering.",
+    "description": "Activate target and return its visible region on the selected display (default primary). PNG metadata uses Windows desktop physical pixels. Not offscreen rendering.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "target": {
           "type": "string",
           "description": "Session target from the latest windows_list. Re-list invalidates previous targets."
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference from the latest displays_list in this connection; re-list after topology changes. Omit to use the primary monitor."
         }
       },
       "required": [
@@ -98,7 +195,7 @@
   },
   {
     "name": "locate",
-    "description": "Activate target, find one image match in its visible primary-monitor region. Multiple/no matches are errors. Exact and confidence are mutually exclusive.",
+    "description": "Activate target and find one template in its visible selected-display region (default primary). Returns desktop physical coordinates, possibly negative. Multiple/no matches fail. Exact and confidence are mutually exclusive.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -131,6 +228,10 @@
           "minimum": 0.1,
           "maximum": 4,
           "default": 1
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference from the latest displays_list in this connection; re-list after topology changes. Omit to use the primary monitor."
         }
       },
       "required": [
@@ -181,6 +282,10 @@
           "minimum": 0.1,
           "maximum": 4,
           "default": 1
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference from the latest displays_list in this connection; re-list after topology changes. Omit to use the primary monitor."
         }
       },
       "required": [

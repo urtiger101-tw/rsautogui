@@ -20,9 +20,11 @@ foreach ($name in @('install.ps1','uninstall.ps1','install.cmd','ConfigEditor.cs
 }
 Copy-Item -LiteralPath (Join-Path $repo 'skills') -Destination $OutputDir -Recurse
 New-Item -ItemType Directory -Path (Join-Path $OutputDir 'docs') | Out-Null
-foreach ($name in @('agent-installation.md','validation-agent.md','recognition-app-control.md','screensaver.md')) {
+foreach ($name in @('agent-installation.md','validation-agent.md','recognition-app-control.md','screensaver.md','virtual-display.md','validation-virtual-display.md')) {
     Copy-Item -LiteralPath (Join-Path $repo "docs\$name") -Destination (Join-Path $OutputDir 'docs')
 }
+New-Item -ItemType Directory -Path (Join-Path $OutputDir 'scripts') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\virtual-display.ps1') -Destination (Join-Path $OutputDir 'scripts')
 Copy-Item -LiteralPath (Join-Path $repo 'examples\support\mcp_tools.json') -Destination (Join-Path $OutputDir 'docs\mcp-tools.json')
 Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $OutputDir
 $files = @(Get-ChildItem -LiteralPath $OutputDir -Recurse -File | ForEach-Object {

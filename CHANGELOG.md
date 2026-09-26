@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added explicit Windows display snapshots, real display/region PNG capture, display-targeted recognition/clicking with virtual-desktop SendInput coordinates, and Win32 window placement on physical or IDD virtual monitors. Existing primary-monitor defaults and corner fail-safe remain.
+- Added three MCP tools (`displays_list`, `display_capture`, `window_to_display`), optional display references for capture/locate/click_image, CLI display commands, and updated Skills. Display identity/geometry is revalidated and stale references are rejected.
+- Added an optional pinned VDD/NefCon preparation and administrator installation helper with ZIP hashes, signature checks, one-monitor configuration and owned-device recovery records. Driver downloads/installations are separate from the lazy Rust EXE/DLL and are never triggered by MCP.
+
 - Added a small Windows launcher with an on-demand `autogui_runtime.dll`; help and MCP negotiation/listing run without loading the DLL. Kept all image codecs and library APIs. Release uses size optimization, Thin LTO and symbol stripping while recognition/FFT retain opt-level 3 and unwind cleanup remains enabled.
 - Added stdio MCP with eight tools, session window references, PNG image content, checked input, cooperative cancellation and per-connection screensaver pause leases restored on disconnect.
 - Exposed Win32 inspect/activate/move/resize/minimize/maximize/restore/hide/show/close in CLI and MCP, including honest WM_CLOSE request semantics.

@@ -4,6 +4,7 @@
 //! [`Error::UnsupportedPlatform`] for window APIs.
 
 mod backend;
+mod display;
 #[cfg(any(windows, feature = "os"))]
 mod dpi;
 mod error;
@@ -17,6 +18,7 @@ mod types;
 mod window;
 
 pub use backend::FakeBackend;
+pub use display::Display;
 pub use error::{Error, Result};
 pub use gui::{AutoGui, KeyHold};
 pub use locate::LocateOptions;

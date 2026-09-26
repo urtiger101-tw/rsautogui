@@ -1,6 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::Display;
 use crate::backend::{Backend, FakeBackend, default_backend};
 use crate::error::{Error, Result};
 use crate::failsafe;
@@ -461,6 +462,63 @@ impl AutoGui {
         let img = self.backend.capture(Some(region))?;
         self.after_read_heavy()?;
         Ok(img)
+    }
+
+    /// Capture an explicitly selected real or virtual Windows display. The
+    /// default screenshot APIs and primary-monitor corner fail-safe are unchanged.
+    pub fn screenshot_display(&mut self, display: &Display) -> Result<Screenshot> {
+        self.screenshot_display_region(display, display.bounds())
+    }
+
+    /// Region uses global Windows physical pixels, including negative origins.
+    /// It must fit entirely inside this display's enumerated bounds.
+    pub fn screenshot_display_region(
+        &mut self,
+        display: &Display,
+        region: Rect,
+    ) -> Result<Screenshot> {
+        self.before_read_heavy()?;
+        let frame = display.capture(region)?;
+        self.after_read_heavy()?;
+        Ok(frame)
+    }
+
+    /// Click a physical desktop coordinate on a validated Windows display.
+    /// Windows has one shared cursor/focus across physical and virtual monitors.
+    pub fn click_display(&mut self, display: &Display, point: Point) -> Result<()> {
+        self.move_to_display(display, point)?;
+        self.click()
+    }
+
+    /// Move the shared cursor to an explicit display point without clicking.
+    /// Callers can recheck their target/focus/cancellation before sending input.
+    pub fn move_to_display(&mut self, display: &Display, point: Point) -> Result<()> {
+        self.before_action()?;
+        display.validate()?;
+        if !display.contains(point) {
+            return Err(Error::InvalidArgument(
+                "point is outside the selected display",
+            ));
+        }
+        self.backend.move_mouse_desktop(point)?;
+        let start = Instant::now();
+        while self.backend.mouse_pos()? != point {
+            self.before_action()?;
+            if start.elapsed() >= Duration::from_millis(100) {
+                return Err(Error::Input(
+                    "cursor did not reach selected display point; no click sent".into(),
+                ));
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        display.validate()?;
+        self.after_write()?;
+        if self.backend.mouse_pos()? != point {
+            return Err(Error::Input(
+                "cursor moved during the configured pause; no click sent".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn screenshot_to_file<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<Screenshot> {

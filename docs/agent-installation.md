@@ -45,13 +45,13 @@ cargo build --release --workspace --all-features --locked
 
 命令：`autogui-control.exe mcp`，stdio newline JSON-RPC，stdout 僅協定訊息、stderr 診斷，沒有 TCP 連接埠。支援 2024-11-05、2025-03-26、2025-06-18、2025-11-25 版本。先 initialize，再送 notifications/initialized。工具 schema 在 `mcp-tools.json`。
 
-提供 `windows_list`、`window_control`、`capture`、`locate`、`click_image`、`type_text`、`hotkey`、`screensaver`。清單回傳連線專用 target；重新列舉會使舊 target 失效。擷取回傳 PNG image content，不要求宿主另讀本機檔案。輸入送出後仍須確認 App 的實際結果。
+提供 11 個工具：`displays_list`、`display_capture`、`window_to_display`、`windows_list`、`window_control`、`capture`、`locate`、`click_image`、`type_text`、`hotkey`、`screensaver`。清單回傳連線專用 target／display；重新列舉會使同類舊參照失效。擷取回傳 PNG image content，不要求宿主另讀本機檔案。輸入送出後仍須確認 App 的實際結果。指定顯示器與選配驅動見 [虛擬顯示器指南](virtual-display.md)。
 
 每行最大 1 MiB，超過會關閉連線；待處理佇列 16 筆，滿載時回傳 Server busy，保持連線。搜尋 timeout 最大 30 秒，文字最大 4096 字元。取消及 EOF 會在操作邊界、找圖輪詢及逐字輸入時中斷；單次原生呼叫/辨識不能中途撤回。序列處理桌面輸入，避免多工具互相搶焦點。暫停以專屬子程序持有租約，MCP 消失時管線 EOF 觸發還原；強制終止 helper 後，可由 durable journal 與 `screensaver resume` 恢復。
 
 ## Windows API
 
-`window`/`window_control` 使用 `EnumWindows`、`GetWindowTextW`、`SetForegroundWindow`、`ShowWindow`、`SetWindowPos`、`PostMessageW(WM_CLOSE)`。`move`/`resize` 讀回幾何；Window 保存 HWND 的原程序/執行緒身分。鍵鼠透過 Enigo 使用 Win32 輸入。僅主螢幕實體像素；不提供 OCR、UI Automation 控制樹、任意 SendMessage 或提權/解鎖。
+`window`/`window_control` 使用 `EnumWindows`、`GetWindowTextW`、`SetForegroundWindow`、`ShowWindow`、`SetWindowPos`、`PostMessageW(WM_CLOSE)`。`move`/`resize` 讀回幾何；Window 保存 HWND 的原程序/執行緒身分。一般鍵鼠透過 Enigo 使用 Win32 輸入；指定顯示器的點擊使用 `SendInput` 的 `MOUSEEVENTF_VIRTUALDESK`。預設主螢幕，可明確指定實體／虛擬顯示器，座標為桌面實體像素；不提供 OCR、UI Automation 控制樹、任意 SendMessage 或提權/解鎖。
 
 `hide` 後視窗不在可見清單；MCP 可用保留的 target 執行 `show`。CLI 以可見標題搜尋，因此不要用 CLI hide 後期待同一標題搜尋能找回；優先用 MCP 操作 hide/show。
 
