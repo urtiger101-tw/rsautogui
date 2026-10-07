@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Use fixed-size RGB array slices during exact template search, preserving matching behavior and satisfying current Clippy checks.
+
+- Release the held mouse button when a custom drag tween panics and unwinds, while preserving normal error propagation and avoiding duplicate releases. Added fake-backend regressions for absolute/relative drag panic cleanup and successful release order.
+
 - Added explicit Windows display snapshots, real display/region PNG capture, display-targeted recognition/clicking with virtual-desktop SendInput coordinates, and Win32 window placement on physical or IDD virtual monitors. Existing primary-monitor defaults and corner fail-safe remain.
 - Added three MCP tools (`displays_list`, `display_capture`, `window_to_display`), optional display references for capture/locate/click_image, CLI display commands, and updated Skills. Display identity/geometry is revalidated and stale references are rejected.
 - Added an optional pinned VDD/NefCon preparation and administrator installation helper with ZIP hashes, signature checks, one-monitor configuration and owned-device recovery records. Driver downloads/installations are separate from the lazy Rust EXE/DLL and are never triggered by MCP.

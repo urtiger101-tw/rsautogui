@@ -350,7 +350,9 @@ fn recognizes_and_controls_own_native_app() {
     assert!(
         template
             .pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .any(|p| p != &template.pixels[..3]),
         "fixture button must be visibly rendered"
     );
@@ -652,7 +654,9 @@ fn controls_own_app_on_selected_display() {
     assert!(
         template
             .pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .any(|p| p != &template.pixels[..3])
     );
     let template_path = std::env::temp_dir().join(format!(

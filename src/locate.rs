@@ -81,19 +81,16 @@ fn search_exact(
     let max_x = hay.width as i32 - needle.width as i32;
     let max_y = hay.height as i32 - needle.height as i32;
     let mut frequencies = HashMap::<u32, usize>::new();
-    for pixel in needle.pixels.chunks_exact(3) {
+    let pixels = needle.pixels.as_chunks::<3>().0;
+    for pixel in pixels {
         *frequencies.entry(pixel_key(pixel, gray)).or_default() += 1;
     }
-    let anchor = needle
-        .pixels
-        .chunks_exact(3)
-        .enumerate()
-        .min_by_key(|(_, pixel)| {
-            frequencies
-                .get(&pixel_key(pixel, gray))
-                .copied()
-                .unwrap_or(usize::MAX)
-        });
+    let anchor = pixels.iter().enumerate().min_by_key(|(_, pixel)| {
+        frequencies
+            .get(&pixel_key(*pixel, gray))
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
     let Some((anchor_index, anchor_pixel)) = anchor else {
         return Ok(hits);
     };

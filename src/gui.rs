@@ -22,6 +22,29 @@ pub struct KeyHold<'a> {
     keys: Vec<String>,
 }
 
+// Keep drag cleanup active while user-supplied tween code can unwind.
+struct MouseButtonHold<'a> {
+    gui: &'a mut AutoGui,
+    button: MouseButton,
+    armed: bool,
+}
+
+impl MouseButtonHold<'_> {
+    fn release(&mut self) -> Result<()> {
+        self.armed = false;
+        self.gui.backend.button(self.button, false)
+    }
+}
+
+impl Drop for MouseButtonHold<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            // Cleanup must bypass fail-safe checks, just like explicit release.
+            let _ = self.release();
+        }
+    }
+}
+
 impl std::ops::Deref for KeyHold<'_> {
     type Target = AutoGui;
     fn deref(&self) -> &Self::Target {
@@ -207,11 +230,16 @@ impl AutoGui {
         }
         self.before_action()?;
         self.backend.button(button, true)?;
-        let movement = self.animate_move(Point::new(x, y), dur, tween);
-        let release = self.backend.button(button, false);
+        let mut held = MouseButtonHold {
+            gui: self,
+            button,
+            armed: true,
+        };
+        let movement = held.gui.animate_move(Point::new(x, y), dur, tween);
+        let release = held.release();
         movement?;
         release?;
-        self.after_write()
+        held.gui.after_write()
     }
 
     pub fn drag_rel(
@@ -874,6 +902,58 @@ mod tests {
             Err(Error::FailSafe(_))
         ));
         assert_eq!(captures.get(), 1);
+    }
+
+    #[test]
+    fn panicking_drag_releases_button() {
+        fn panic_tween(_: f64) -> f64 {
+            panic!("custom tween failed");
+        }
+        for relative in [false, true] {
+            let fake = FakeBackend::new(200, 100);
+            let events = fake.shared_events();
+            let mut g = AutoGui::with_fake(fake);
+            g.settings_mut().pause = Duration::ZERO;
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if relative {
+                    g.drag_rel(
+                        10,
+                        10,
+                        Duration::from_millis(1),
+                        panic_tween,
+                        MouseButton::Left,
+                    )
+                } else {
+                    g.drag_to(
+                        110,
+                        60,
+                        Duration::from_millis(1),
+                        panic_tween,
+                        MouseButton::Left,
+                    )
+                }
+            }));
+            assert!(panic.is_err(), "the caller must still receive the panic");
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["button Left down", "button Left up"],
+                "relative={relative}"
+            );
+        }
+    }
+
+    #[test]
+    fn successful_drag_releases_button_once() {
+        let fake = FakeBackend::new(200, 100);
+        let events = fake.shared_events();
+        let mut g = AutoGui::with_fake(fake);
+        g.settings_mut().pause = Duration::ZERO;
+        g.drag_to(110, 60, Duration::ZERO, tween::linear, MouseButton::Left)
+            .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            ["button Left down", "move 110,60", "button Left up"]
+        );
     }
 
     #[test]
