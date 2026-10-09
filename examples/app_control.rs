@@ -12,6 +12,8 @@ mod mcp;
 pub(crate) mod mcp_tools;
 #[path = "support/screensaver.rs"]
 mod screensaver;
+#[path = "support/session.rs"]
+pub(crate) mod session;
 #[path = "support/window_command.rs"]
 mod window_command;
 
@@ -168,6 +170,11 @@ fn run() -> autogui::Result<()> {
         println!(
             "\n顯示器：app_control display list\n        app_control display capture <裝置名稱> <output.png>\n        app_control display move <裝置名稱> <唯一視窗標題>\ncapture／locate／click 可在最後附加 --display <裝置名稱>。顯示器座標為 Windows 桌面實體像素，可為負數。虛擬顯示器需另外安裝 IDD 驅動；所有螢幕共用焦點與滑鼠。"
         );
+        println!(
+            "
+無人值守／無螢幕檢查：app_control session status [--json]
+回報工作階段、鎖定、遠端桌面、顯示器與截圖探測；有阻擋項時以非零碼結束。詳見 docs/headless.md。"
+        );
         return Ok(());
     }
     #[cfg(feature = "agent")]
@@ -179,6 +186,10 @@ fn run() -> autogui::Result<()> {
     }
     if args[0] == "display" {
         return display_command::run(&args[1..]);
+    }
+    // Diagnostics must work even when the input backend cannot start.
+    if args[0] == "session" {
+        return session::run(&args[1..]);
     }
     let display = if matches!(args[0].as_str(), "capture" | "locate" | "click") {
         if let Some(index) = args

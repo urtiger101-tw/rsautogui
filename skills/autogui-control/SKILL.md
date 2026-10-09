@@ -9,6 +9,7 @@ Prefer the installed `autogui` MCP server. If tools are unavailable, read `runti
 
 ## Observe → target → act → verify
 
+0. When nobody may be watching the screen (scheduled task, RDP, monitor-less PC) or a capture/cursor call fails, call `session_status` first. If `ready` is false, report its blocker codes and advice to the user instead of retrying; never try to unlock, reconnect or change session settings yourself.
 1. Call `windows_list`, using a title substring when possible. Resolve ambiguous windows with the user or current task context; do not choose the first match blindly.
 2. Use the returned `target` for all calls. These references belong to this connection and expire when windows are re-listed. HWND/process/thread validation rejects destroyed/reused windows. Never reuse a reference from another session.
 3. For an explicit physical or virtual monitor, call `displays_list` and choose its returned `display` reference. Use `window_to_display` only when moving the app is authorized. Call `capture` with the display reference to inspect the window; omit display to use the primary monitor. `display_capture` reads the whole selected screen without activating a window. Images report global Windows physical coordinates; image pixel `(u,v)` maps to `(region.left+u, region.top+v)`. Capture sees visible pixels; covered/offscreen/locked desktops are not background captures.
@@ -17,6 +18,7 @@ Prefer the installed `autogui` MCP server. If tools are unavailable, read `runti
 
 ## Tools
 
+- `session_status {}`: read-only readiness check for unattended use (session, console/RDP, lock, input desktop, cursor, displays, capture probe) with `ready` and blocker/warning codes.
 - `windows_list {title?}`: visible windows and fresh target references.
 - `window_control {target,action,x?,y?,width?,height?}`: inspect, activate, minimize, maximize, restore, hide, show, move, resize, close. `move` requires x/y; `resize` requires width/height. `close` requests WM_CLOSE and can leave a save dialog open.
 - `displays_list {}`: active physical/IDD monitors, scoped display references, device names and global physical bounds. Re-list invalidates prior display references. Do not infer virtual-driver identity from an arbitrary friendly name.

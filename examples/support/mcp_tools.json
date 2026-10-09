@@ -1,5 +1,20 @@
 [
   {
+    "name": "session_status",
+    "description": "Read-only readiness check for unattended or monitor-less automation: Windows session id/console/remote state, lock, input desktop, cursor access, active displays and a small primary-monitor capture probe. Returns ready=false with blocker codes and advice (e.g. no-active-display -> optional virtual display driver; session-not-active -> RDP was disconnected). Never unlocks, reconnects or changes settings.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "displays_list",
     "description": "Enumerate active Windows displays, including IDD virtual monitors. Returns connection-scoped display references, device names and physical desktop bounds. Re-list invalidates old display references. Does not install or enable a driver.",
     "inputSchema": {

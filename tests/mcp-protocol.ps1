@@ -58,7 +58,7 @@ try {
     Assert ($before.error.code -eq -32002) 'Pre-initialize request should fail'
     Initialize $client
     $list=Request $client 'tools/list' @{}
-    Assert ($list.result.tools.Count -eq 11) 'Wrong tool count'
+    Assert ($list.result.tools.Count -eq 12) 'Wrong tool count'
     Assert (-not (Loaded $client)) 'DLL loaded just to initialize/list tools'
     $client.Process.StandardInput.WriteLine('{')
     $client.Process.StandardInput.Flush()
@@ -96,7 +96,7 @@ Copy-Item -LiteralPath $Executable -Destination $separated
 $client=StartMcp $separated
 try {
     Initialize $client
-    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 11) 'Tool listing requires DLL'
+    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 12) 'Tool listing requires DLL'
     $missing=Tool $client screensaver @{action='status'}
     Assert ($missing.isError -and $missing.content[0].text -match 'autogui_runtime.dll') 'Missing DLL failure unclear'
 } finally {StopMcp $client}

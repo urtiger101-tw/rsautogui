@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added unattended/monitor-less readiness diagnostics: CLI `session status [--json]` (non-zero exit on blockers) and read-only MCP `session_status`. Reports session/console/RDP state, lock, input desktop, cursor access, active displays and a primary-monitor capture probe, with blocker codes such as `no-active-display`, `remote-not-rendering`, `session-not-active`, `locked` and `service-session`. Decision logic is unit-tested on all platforms.
+- Added `scripts/rdp-to-console.ps1` (administrator, `-WhatIf`/confirmation) to move an RDP session to the console with `tscon` so the desktop keeps rendering after disconnect, plus `docs/headless.md`.
+
 - Added explicit Windows display snapshots, real display/region PNG capture, display-targeted recognition/clicking with virtual-desktop SendInput coordinates, and Win32 window placement on physical or IDD virtual monitors. Existing primary-monitor defaults and corner fail-safe remain.
 - Added three MCP tools (`displays_list`, `display_capture`, `window_to_display`), optional display references for capture/locate/click_image, CLI display commands, and updated Skills. Display identity/geometry is revalidated and stale references are rejected.
 - Added an optional pinned VDD/NefCon preparation and administrator installation helper with ZIP hashes, signature checks, one-monitor configuration and owned-device recovery records. Driver downloads/installations are separate from the lazy Rust EXE/DLL and are never triggered by MCP.

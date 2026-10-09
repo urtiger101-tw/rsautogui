@@ -21,7 +21,7 @@ cargo build --release --workspace --all-features --locked
 .\scripts\package.ps1 -SkipBuild
 ```
 
-MCP 提供 11 個工具，涵蓋顯示器／視窗列舉、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、文字、快捷鍵與螢幕保護程式。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
+MCP 提供 12 個工具，涵蓋無人值守就緒檢查、顯示器／視窗列舉、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、文字、快捷鍵與螢幕保護程式。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
 
 ## 虛擬顯示器
 
@@ -34,6 +34,16 @@ MCP 提供 11 個工具，涵蓋顯示器／視窗列舉、指定顯示器截圖
 ```
 
 驅動獨立下載與安裝，不增加主程式依賴；準備工具固定版本、核對 SHA-256 與簽章，預設一個 1920×1080、60 Hz 顯示器。驅動安裝需要系統管理員；虛擬螢幕與實體螢幕共用鍵盤、滑鼠與焦點。詳見 [虛擬顯示器設定與使用](docs/virtual-display.md)。
+
+## 無螢幕／無人值守
+
+只要 Windows 仍有一個已登入、未鎖定、正在繪製的桌面，就能在沒人看螢幕時運作；沒接實體螢幕時，以虛擬顯示器提供輸出。遠端桌面最小化或中斷會停止繪製，可在離開前以 `scripts\rdp-to-console.ps1` 把工作階段移到主控台。
+
+```powershell
+.\target\release\autogui-control.exe session status   # 有阻擋項時 exit 1；--json 供腳本／排程
+```
+
+MCP 對應唯讀工具 `session_status`。各情境與限制見 [無螢幕／無人值守指南](docs/headless.md)。
 
 ## Install
 

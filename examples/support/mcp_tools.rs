@@ -1,6 +1,6 @@
 use super::{
     active, capture_region, display_command, locate_target, scaled_template, screen_region,
-    window_command,
+    session, window_command,
 };
 use autogui::{AutoGui, Display, Error, LocateOptions, Rect, Result, Screenshot, Window};
 use base64::Engine;
@@ -188,6 +188,12 @@ impl Session {
                 Ok(text(
                     json!({"displays":results,"note":"Physical and IDD virtual monitors share the Windows input desktop. Re-enumerate after changing display topology."}),
                 ))
+            }
+            "session_status" => {
+                let _: Empty = decode(args)?;
+                check()?;
+                let facts = session::gather()?;
+                Ok(text(session::to_json(&facts, &session::assess(&facts))))
             }
             "display_capture" => {
                 let a: DisplayCapture = decode(args)?;

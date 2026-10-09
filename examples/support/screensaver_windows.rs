@@ -421,7 +421,7 @@ fn resume() -> Result<()> {
     Ok(())
 }
 
-fn input_desktop() -> Result<String> {
+pub(crate) fn input_desktop() -> Result<String> {
     let raw = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
     if raw.is_null() {
         return Err(win_error("OpenInputDesktop(read)"));
