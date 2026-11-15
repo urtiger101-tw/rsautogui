@@ -10,6 +10,7 @@ param(
     [string]$OpenCodeHome,
     [string]$ClaudeConfig,
     [string]$AgyConfig,
+    [string]$AgySkillRoot,
     [switch]$NonInteractive,
     [switch]$Preview
 )
@@ -44,11 +45,12 @@ if (-not $CodexHome) { $CodexHome = if ($HomeDirectory -eq $env:USERPROFILE -and
 if (-not $OpenCodeHome) { $OpenCodeHome = if ($HomeDirectory -eq $env:USERPROFILE -and $env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME 'opencode' } else { Join-Path $HomeDirectory '.config\opencode' } }
 if (-not $ClaudeConfig) { $ClaudeConfig = Join-Path $HomeDirectory '.claude.json' }
 if (-not $AgyConfig) { $AgyConfig = Join-Path $HomeDirectory '.gemini\config\mcp_config.json' }
+if (-not $AgySkillRoot) { $AgySkillRoot = Join-Path $HomeDirectory '.gemini\config\skills' }
 $roots = @{
     codex = Join-Path $CodexHome 'skills'
     claude = Join-Path $HomeDirectory '.claude\skills'
     opencode = Join-Path $OpenCodeHome 'skills'
-    agy = Join-Path $HomeDirectory '.gemini\antigravity-cli\skills'
+    agy = $AgySkillRoot
 }
 $openConfig = Join-Path $OpenCodeHome 'opencode.json'
 if (Test-Path -LiteralPath (Join-Path $OpenCodeHome 'opencode.jsonc')) { $openConfig = Join-Path $OpenCodeHome 'opencode.jsonc' }
@@ -96,6 +98,8 @@ foreach ($name in $McpHosts) {
         } finally { $env:CODEX_HOME = $previous }
         $updated = $null
     } else {
+        # Normalize only the parse input; the existing file is backed up as bytes.
+        if ([string]::IsNullOrWhiteSpace($before)) { $before = '{}' }
         $definition = if ($name -eq 'opencode') { @{type='local';command=@($exe,'mcp');enabled=$true} } else { @{command=$exe;args=@('mcp')} }
         $container = if ($name -eq 'opencode') { 'mcp' } else { 'mcpServers' }
         $updated = [AutoGuiJson]::AddServer($before, $container, 'autogui', ($definition | ConvertTo-Json -Compress))

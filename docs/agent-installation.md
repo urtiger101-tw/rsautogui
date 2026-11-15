@@ -11,6 +11,8 @@
 .\install.ps1 -SkillHosts codex,claude -McpHosts codex -NonInteractive
 # 其他可讀取 SKILL.md 的 Agent
 .\install.ps1 -CustomSkillRoots 'C:\my-agent\skills' -NonInteractive
+# AGY 舊 CLI 路徑（預設使用 App／CLI 共用目錄）
+.\install.ps1 -SkillHosts agy -AgySkillRoot "$HOME\.gemini\antigravity-cli\skills" -NonInteractive
 # 只安裝程式
 .\install.ps1 -NonInteractive
 ```
@@ -22,9 +24,11 @@
 | Codex | `$CODEX_HOME/skills`，預設 `~/.codex/skills` | 用已安裝的 `codex mcp add` 更新 `$CODEX_HOME/config.toml` |
 | Claude Code | `~/.claude/skills` | `~/.claude.json` 的 `mcpServers.autogui` |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/skills`，預設 `~/.config/opencode/skills` | 同目錄 `opencode.jsonc`（若存在）或 `opencode.json` 的 `mcp.autogui` |
-| AGY CLI | `~/.gemini/antigravity-cli/skills` | `~/.gemini/config/mcp_config.json` 的 `mcpServers.autogui` |
+| AGY App／CLI | `~/.gemini/config/skills`（共用全域目錄） | `~/.gemini/config/mcp_config.json` 的 `mcpServers.autogui` |
 
-可用 `-HomeDirectory`、`-InstallDir`、`-CodexHome`、`-OpenCodeHome`、`-ClaudeConfig`、`-AgyConfig` 指定隔離/自訂位置。Codex 的 MCP 安裝需要本機 Codex CLI；其餘宿主只寫設定檔。JSONC 以局部插入保留既有註解、格式及其他項目。
+可用 `-HomeDirectory`、`-InstallDir`、`-CodexHome`、`-OpenCodeHome`、`-ClaudeConfig`、`-AgyConfig`、`-AgySkillRoot` 指定隔離/自訂位置。`-AgySkillRoot` 是 Skill 父目錄，只在選取 `-SkillHosts agy` 時使用；可指向 CLI 仍支援的 `~/.gemini/antigravity-cli/skills`、`~/.gemini/skills` 或其他共享目錄。安裝器不搬移既有 Skill，解除安裝依原 manifest 的檔案路徑處理，因此舊版安裝仍可用原解除安裝程式移除。
+
+Codex 的 MCP 安裝需要本機 Codex CLI；其餘宿主只寫設定檔。JSONC 以局部插入保留既有註解、格式及其他項目。既有空檔或僅含空白的 JSON MCP 設定，在解析時視為 `{}`；原始 bytes 仍保留備份。若安裝後設定未被修改，解除安裝會逐 byte 還原空檔／空白，而非寫成 `null`；復原備份仍留在 `AutoGui.recovery-*`。
 
 解除安裝：執行安裝目錄內 `uninstall.ps1`。安裝器會備份要修改的 MCP 設定，並記錄安裝後雜湊。解除安裝只刪除未變更的自有檔案、還原未再變更的設定；使用者後來修改過的檔案會保留並明確提示。備份包含原設定，僅留在本機，不會放入發行包。完整解除安裝後，原始設定備份移至程式目錄旁的 `.recovery-<id>` 目錄，讓原位置可重新安裝。升級前先解除安裝；若仍有自行修改的內容，整理後再安裝。
 
@@ -61,4 +65,5 @@ cargo build --release --workspace --all-features --locked
 - [OpenCode Skills](https://opencode.ai/docs/skills) 與 [MCP](https://opencode.ai/docs/mcp-servers/)
 - [Claude Code Skills](https://code.claude.com/docs/en/skills) 與 [MCP](https://code.claude.com/docs/en/mcp)
 - [AGY CLI 設定遷移及路徑](https://antigravity.google/docs/cli/gcli-migration/)
+- [Antigravity Skills（App／CLI 共享與 CLI 舊路徑）](https://antigravity.google/docs/skills/) 與 [Customization discovery](https://antigravity.google/docs/customization-discovery/)
 - Codex 註冊參數以本機 `codex mcp add --help` 為準。
