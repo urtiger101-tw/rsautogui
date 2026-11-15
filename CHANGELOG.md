@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed installation with existing empty/whitespace MCP JSON while preserving byte-exact uninstall backups. Antigravity skills now default to the shared `.gemini/config/skills`; `-AgySkillRoot` supports legacy/custom locations.
+- Fixed restore timing out when a minimized window returns to its previous maximized state; move/resize and display placement still explicitly normalize the window first.
+- Added MCP `click_at` and vertical/horizontal `scroll`, bound to the latest single-use window capture for 60 seconds. Input checks target identity, foreground, geometry, display, cursor and a local pixel patch before dispatch; invalid attempts also consume the proof.
+- Batched MCP `type_text` into at most 32 Unicode scalar values per foreground/cancellation check, retaining library fail-safe checks and the configured pause per batch. Clipboard paste and UI Automation remain outside this change.
+
 - Added unattended/monitor-less readiness diagnostics: CLI `session status [--json]` (non-zero exit on blockers) and read-only MCP `session_status`. Reports session/console/RDP state, lock, input desktop, cursor access, active displays and a primary-monitor capture probe, with blocker codes such as `no-active-display`, `remote-not-rendering`, `session-not-active`, `locked` and `service-session`. Decision logic is unit-tested on all platforms.
 - Added `scripts/rdp-to-console.ps1` (administrator, `-WhatIf`/confirmation) to move an RDP session to the console with `tscon` so the desktop keeps rendering after disconnect, plus `docs/headless.md`.
 

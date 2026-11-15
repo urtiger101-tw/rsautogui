@@ -157,7 +157,7 @@ pub(crate) fn ready(findings: &[Finding]) -> bool {
 }
 
 fn uniform(pixels: &[u8]) -> bool {
-    pixels.chunks_exact(3).all(|p| p == &pixels[..3])
+    pixels.as_chunks::<3>().0.iter().all(|p| p == &pixels[..3])
 }
 
 /// Gather facts from the current process's Windows session.

@@ -49,9 +49,11 @@ cargo build --release --workspace --all-features --locked
 
 命令：`autogui-control.exe mcp`，stdio newline JSON-RPC，stdout 僅協定訊息、stderr 診斷，沒有 TCP 連接埠。支援 2024-11-05、2025-03-26、2025-06-18、2025-11-25 版本。先 initialize，再送 notifications/initialized。工具 schema 在 `mcp-tools.json`。
 
-提供 11 個工具：`displays_list`、`display_capture`、`window_to_display`、`windows_list`、`window_control`、`capture`、`locate`、`click_image`、`type_text`、`hotkey`、`screensaver`。清單回傳連線專用 target／display；重新列舉會使同類舊參照失效。擷取回傳 PNG image content，不要求宿主另讀本機檔案。輸入送出後仍須確認 App 的實際結果。指定顯示器與選配驅動見 [虛擬顯示器指南](virtual-display.md)。
+提供 14 個工具：`session_status`、`displays_list`、`display_capture`、`window_to_display`、`windows_list`、`window_control`、`capture`、`locate`、`click_image`、`click_at`、`scroll`、`type_text`、`hotkey`、`screensaver`。清單回傳連線專用 target／display；重新列舉會使同類舊參照失效。擷取回傳 PNG image content，不要求宿主另讀本機檔案。輸入送出後仍須確認 App 的實際結果。指定顯示器與選配驅動見 [虛擬顯示器指南](virtual-display.md)。
 
-每行最大 1 MiB，超過會關閉連線；待處理佇列 16 筆，滿載時回傳 Server busy，保持連線。搜尋 timeout 最大 30 秒，文字最大 4096 字元。取消及 EOF 會在操作邊界、找圖輪詢及逐字輸入時中斷；單次原生呼叫/辨識不能中途撤回。序列處理桌面輸入，避免多工具互相搶焦點。暫停以專屬子程序持有租約，MCP 消失時管線 EOF 觸發還原；強制終止 helper 後，可由 durable journal 與 `screensaver resume` 恢復。
+每行最大 1 MiB，超過會關閉連線；待處理佇列 16 筆，滿載時回傳 Server busy，保持連線。搜尋 timeout 最大 30 秒，文字最大 4096 個 Unicode scalar；每段最多 32 個字元，段前檢查取消、EOF 及前景，底層逐字 fail-safe 保留。單次原生呼叫/辨識不能中途撤回，段內失焦可能已有部分文字送出。序列處理桌面輸入，避免多工具互相搶焦點。暫停以專屬子程序持有租約，MCP 消失時管線 EOF 觸發還原；強制終止 helper 後，可由 durable journal 與 `screensaver resume` 恢復。
+
+`click_at {target,capture_id,x,y}` 與 `scroll {target,capture_id,x,y,clicks,horizontal?}` 使用最近一次 `capture` 的 PNG 相對座標及一次性憑證（60 秒過期）。任何嘗試均消耗憑證；其他工具呼叫除 `session_status` 外亦使憑證失效，請操作後重新擷取。輸入前後檢查目標、前景、視窗／顯示器幾何、游標及點周圍最多 32×32 像素。hover 變色時先重新擷取；局部範圍外與最後檢查後的畫面變化仍須由操作者確認。詳見[座標操作說明](recognition-app-control.md#mcp-截圖座標操作與長文字)。
 
 ## Windows API
 

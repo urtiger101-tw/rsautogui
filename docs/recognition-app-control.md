@@ -76,6 +76,20 @@ drop(held); // 反序釋放修飾鍵
 | 管理員權限 App、保護桌面、部分遊戲 | Windows 可能限制輸入；目前沒有提升權限或繞過保護機制 |
 | 背景、最小化或被遮擋的控制項 | 螢幕找圖無法辨識不可見像素，需先顯示目標 |
 
+## MCP 截圖座標操作與長文字
+
+`capture {target,display?}` 回傳 PNG、桌面範圍 `region` 與 `capture_id`。觀察圖片後可直接呼叫：
+
+```json
+{"name":"click_at","arguments":{"target":"w1-0","capture_id":"c1","x":120,"y":80}}
+```
+
+target／capture_id 必須取自當次連線的真實回應；`x/y` 是 PNG 左上角起算的相對座標，右、下邊界不包含在內。若需捲動，改用 `scroll` 並加 `clicks:-3`（往下）；`horizontal:true` 時正數往右。每次嘗試都消耗憑證，60 秒後過期；新截圖或其他工具（`session_status` 除外）會使舊憑證失效。`display_capture` 不產生輸入憑證。
+
+送出事件前檢查原 target 身分、前景、視窗／顯示器幾何、游標、取消訊號及座標周圍最多 32×32 像素，移鼠後再檢查。hover／動畫導致像素變動時會拒絕；游標可能已移到目的地，重新擷取後再判斷。此局部比對無法偵測範圍外的語意變化，也無法消除最後檢查至系統輸入間的狀態變動；每次操作後仍須截圖確認。
+
+`type_text` 每段最多 32 個 Unicode scalar，段前檢查取消及前景，段後依設定暫停。底層逐字 fail-safe 保留；失焦或取消時可能已有部分文字送出。剪貼簿貼上與 UI Automation 尚未提供。
+
 ## 驗證
 
 ```powershell

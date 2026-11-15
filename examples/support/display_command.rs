@@ -20,7 +20,10 @@ pub(super) fn move_window(
         return Err(Error::InvalidArgument("display is too small for a window"));
     }
     check()?;
-    if window.is_minimized()? || window.is_maximized()? {
+    if window.is_minimized()? {
+        window.restore()?;
+    }
+    if window.is_maximized()? {
         window.restore()?;
     }
     let old = window.box_rect()?;

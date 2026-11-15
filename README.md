@@ -21,7 +21,7 @@ cargo build --release --workspace --all-features --locked
 .\scripts\package.ps1 -SkipBuild
 ```
 
-MCP 提供 12 個工具，涵蓋無人值守就緒檢查、顯示器／視窗列舉、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、文字、快捷鍵與螢幕保護程式。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
+MCP 提供 14 個工具，涵蓋無人值守就緒檢查、顯示器／視窗列舉、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、捲動、文字、快捷鍵與螢幕保護程式。`capture` 回傳一次性 `capture_id`，可直接使用截圖內座標呼叫 `click_at`／`scroll`，省去外部裁圖。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
 
 ## 虛擬顯示器
 

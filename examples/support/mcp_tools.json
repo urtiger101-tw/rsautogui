@@ -183,7 +183,7 @@
   },
   {
     "name": "capture",
-    "description": "Activate target and return its visible region on the selected display (default primary). PNG metadata uses Windows desktop physical pixels. Not offscreen rendering.",
+    "description": "Activate target and return its visible region on the selected display (default primary). PNG metadata uses Windows desktop physical pixels. Not offscreen rendering. Returns capture_id for one click_at/scroll within 60 seconds; coordinates for those tools are relative to this image. New captures and other tool calls (except session_status) invalidate it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -317,8 +317,99 @@
     }
   },
   {
+    "name": "click_at",
+    "description": "Send one real left click using a single-use window capture proof. Checks target identity, foreground, bounds, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Same target as the latest window capture."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "Unused capture_id returned by capture in this connection, valid for 60 seconds."
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Horizontal pixel in the captured PNG, relative to its left edge."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Vertical pixel in the captured PNG, relative to its top edge."
+        }
+      },
+      "required": [
+        "target",
+        "capture_id",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "scroll",
+    "description": "Send wheel input at the observed image point using a single-use window capture proof. Checks target identity, foreground, bounds, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Same target as the latest window capture."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "Unused capture_id returned by capture in this connection, valid for 60 seconds."
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Horizontal pixel in the captured PNG, relative to its left edge."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Vertical pixel in the captured PNG, relative to its top edge."
+        },
+        "clicks": {
+          "type": "integer",
+          "minimum": -100,
+          "maximum": 100,
+          "description": "Nonzero wheel steps: positive up, negative down; horizontal positive right, negative left."
+        },
+        "horizontal": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "target",
+        "capture_id",
+        "x",
+        "y",
+        "clicks"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "type_text",
-    "description": "Activate target and send Unicode text to the focused control. Rechecks foreground for every character. Partial text may be sent before cancellation/failure.",
+    "description": "Activate target and send Unicode text to the focused control, in batches of at most 32 Unicode scalar values. Rechecks foreground and cancellation before every batch; preserves per-character fail-safe checks. Partial text (up to one batch after focus changes) may be sent before cancellation/failure.",
     "inputSchema": {
       "type": "object",
       "properties": {
