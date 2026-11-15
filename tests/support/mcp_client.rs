@@ -46,7 +46,7 @@ impl Client {
                 .as_array()
                 .unwrap()
                 .len(),
-            12
+            14
         );
         client
     }
@@ -87,7 +87,7 @@ impl Client {
     }
     pub fn tool(&mut self, name: &str, args: Value) -> Value {
         let value = self.raw_tool(name, args);
-        assert_eq!(value["isError"], false, "{value}");
+        assert_eq!(value["isError"], false, "tool {name}: {value}");
         serde_json::from_str(value["content"][0]["text"].as_str().unwrap()).unwrap()
     }
 }

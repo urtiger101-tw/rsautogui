@@ -19,6 +19,8 @@ pub(crate) const NAMES: &[&str] = &[
     "capture",
     "locate",
     "click_image",
+    "click_at",
+    "scroll",
     "type_text",
     "hotkey",
     "screensaver",

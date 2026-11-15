@@ -25,6 +25,9 @@ use windows_sys::Win32::{
     },
 };
 
+static SCROLL_EVENTS: AtomicUsize = AtomicUsize::new(0);
+static EDIT_CHAR_EVENTS: AtomicUsize = AtomicUsize::new(0);
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -52,6 +55,10 @@ unsafe extern "system" fn procedure(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+            SCROLL_EVENTS.fetch_add(1, Ordering::SeqCst);
+            return 0;
+        }
         WM_NCCREATE => {
             let create = unsafe { &*(lparam as *const CREATESTRUCTW) };
             unsafe {
@@ -213,6 +220,9 @@ impl Fixture {
                 .unwrap();
             let mut message = MSG::default();
             while unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } > 0 {
+                if message.message == WM_CHAR && message.hwnd == edit {
+                    EDIT_CHAR_EVENTS.fetch_add(1, Ordering::SeqCst);
+                }
                 if unsafe { TranslateAcceleratorW(hwnd, accelerator, &message) } != 0 {
                     continue;
                 }
@@ -333,6 +343,24 @@ fn recognizes_and_controls_own_native_app() {
         native_rect(fixture.handles.window)
     );
     assert_eq!(window.box_rect().unwrap(), Rect::new(200, 150, 640, 480));
+    window.maximize().unwrap();
+    window.minimize().unwrap();
+    window
+        .restore()
+        .expect("unminimize previously maximized window without timeout");
+    assert!(!window.is_minimized().unwrap() && window.is_maximized().unwrap());
+    window.minimize().unwrap();
+    window
+        .move_to(200, 150)
+        .expect("move normalizes minimized/maximized window");
+    assert!(!window.is_minimized().unwrap() && !window.is_maximized().unwrap());
+    window.maximize().unwrap();
+    window.minimize().unwrap();
+    window
+        .resize_to(640, 480)
+        .expect("resize normalizes minimized/maximized window");
+    assert!(!window.is_minimized().unwrap() && !window.is_maximized().unwrap());
+    window.move_to(200, 150).unwrap();
     window.minimize().unwrap();
     assert!(window.is_minimized().unwrap());
     window
@@ -350,7 +378,9 @@ fn recognizes_and_controls_own_native_app() {
     assert!(
         template
             .pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .any(|p| p != &template.pixels[..3]),
         "fixture button must be visibly rendered"
     );
@@ -479,8 +509,13 @@ fn recognizes_and_controls_own_native_app() {
         assert!(window.is_maximized().unwrap());
         client.tool(
             "window_control",
+            json!({"target":target,"action":"minimize"}),
+        );
+        client.tool(
+            "window_control",
             json!({"target":target,"action":"restore"}),
         );
+        assert!(!window.is_minimized().unwrap() && window.is_maximized().unwrap());
         client.tool(
             "window_control",
             json!({"target":target,"action":"move","x":200,"y":150}),
@@ -496,6 +531,85 @@ fn recognizes_and_controls_own_native_app() {
             .unwrap();
         let image = image::load_from_memory(&data).unwrap();
         assert_eq!((image.width(), image.height()), (640, 480));
+        let metadata: serde_json::Value =
+            serde_json::from_str(captured["content"][0]["text"].as_str().unwrap()).unwrap();
+        let id = metadata["capture_id"].as_str().unwrap();
+        let bounds = window.box_rect().unwrap();
+        let button = autogui::center(native_rect(fixture.handles.button));
+        // Position first so the observed baseline includes the button hover state.
+        gui.move_to_xy(button.x, button.y).unwrap();
+        // Windows themed hover transitions must finish before taking the proof.
+        std::thread::sleep(Duration::from_millis(250));
+        let rejected = client.raw_tool(
+            "click_at",
+            json!({"target":target,"capture_id":id,"x":640,"y":0}),
+        );
+        assert_eq!(rejected["isError"], true);
+        let rejected = client.raw_tool("click_at", json!({"target":target,"capture_id":id,"x":button.x-bounds.left,"y":button.y-bounds.top}));
+        assert_eq!(
+            rejected["isError"], true,
+            "failed attempts consume the proof"
+        );
+        let captured = client.tool("capture", json!({"target":target}));
+        let args = json!({"target":target,"capture_id":captured["capture_id"],"x":button.x-bounds.left,"y":button.y-bounds.top});
+        let before = fixture.clicks.load(Ordering::SeqCst);
+        client.tool("click_at", args.clone());
+        wait_until(|| fixture.clicks.load(Ordering::SeqCst) == before + 1);
+        assert_eq!(
+            client.raw_tool("click_at", args)["isError"],
+            true,
+            "proof cannot be replayed"
+        );
+        let captured = client.tool("capture", json!({"target":target}));
+        let original_label = native_text(fixture.handles.button);
+        unsafe {
+            SetWindowTextW(
+                fixture.handles.button as HWND,
+                wide("Changed pixels").as_ptr(),
+            );
+            UpdateWindow(fixture.handles.button as HWND);
+        }
+        assert_eq!(client.raw_tool("click_at", json!({"target":target,"capture_id":captured["capture_id"],"x":button.x-bounds.left,"y":button.y-bounds.top}))["isError"], true);
+        assert_eq!(fixture.clicks.load(Ordering::SeqCst), before + 1);
+        unsafe {
+            SetWindowTextW(
+                fixture.handles.button as HWND,
+                wide(&original_label).as_ptr(),
+            );
+            UpdateWindow(fixture.handles.button as HWND);
+        }
+        // A geometry change outside MCP must reject input without another click.
+        let captured = client.tool("capture", json!({"target":target}));
+        window.move_to(210, 150).unwrap();
+        assert_eq!(
+            client.raw_tool(
+                "click_at",
+                json!({"target":target,"capture_id":captured["capture_id"],"x":20,"y":20})
+            )["isError"],
+            true
+        );
+        assert_eq!(fixture.clicks.load(Ordering::SeqCst), before + 1);
+        window.move_to(200, 150).unwrap();
+        let captured = client.tool("capture", json!({"target":target}));
+        window.hide().unwrap();
+        assert_eq!(
+            client.raw_tool(
+                "click_at",
+                json!({"target":target,"capture_id":captured["capture_id"],"x":20,"y":20})
+            )["isError"],
+            true
+        );
+        assert_eq!(fixture.clicks.load(Ordering::SeqCst), before + 1);
+        window.show().unwrap();
+        window.activate().unwrap();
+        let wheel_point = autogui::Point::new(bounds.right() - 40, bounds.bottom() - 40);
+        gui.move_to_xy(wheel_point.x, wheel_point.y).unwrap();
+        for horizontal in [false, true] {
+            let captured = client.tool("capture", json!({"target":target}));
+            let before = SCROLL_EVENTS.load(Ordering::SeqCst);
+            client.tool("scroll", json!({"target":target,"capture_id":captured["capture_id"],"x":wheel_point.x-bounds.left,"y":wheel_point.y-bounds.top,"clicks":-3,"horizontal":horizontal}));
+            wait_until(|| SCROLL_EVENTS.load(Ordering::SeqCst) > before);
+        }
         let count = fixture.clicks.load(Ordering::SeqCst);
         let cancelled = client.cancelled_tool(
             "locate",
@@ -526,6 +640,29 @@ fn recognizes_and_controls_own_native_app() {
             json!({"target":target,"text":"MCP 原生 DLL 驗證完成"}),
         );
         wait_until(|| native_text(fixture.handles.edit) == "MCP 原生 DLL 驗證完成");
+        client.tool("hotkey", json!({"target":target,"keys":["ctrl","a"]}));
+        let long_text = "中🙂Rust123".repeat(125);
+        let before_chars = EDIT_CHAR_EVENTS.load(Ordering::SeqCst);
+        let started = Instant::now();
+        client.tool("type_text", json!({"target":target,"text":long_text}));
+        let dispatched = started.elapsed();
+        // SendInput queues events; receipt by the application is asynchronous.
+        while native_text(fixture.handles.edit) != long_text {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "long text not received: {} of {} UTF16 WM_CHAR events; actual scalar length {}",
+                EDIT_CHAR_EVENTS.load(Ordering::SeqCst) - before_chars,
+                long_text.encode_utf16().count(),
+                native_text(fixture.handles.edit).chars().count()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        println!(
+            "PASS long Unicode text: {} scalars dispatched in {:?}, received in {:?}",
+            long_text.chars().count(),
+            dispatched,
+            started.elapsed()
+        );
         println!(
             "PASS MCP via lazy DLL: lifecycle, scoped/stale targets, Win32 move/resize/hide/show/minimize/maximize/restore, PNG, locate/click receipt, hotkey and Unicode text"
         );
@@ -572,7 +709,16 @@ fn recognizes_and_controls_own_native_app() {
     }
     #[cfg(not(feature = "agent"))]
     window.close().unwrap();
-    wait_until(|| unsafe { IsWindow(fixture.handles.window as HWND) } == 0);
+    // Destroying the legacy EDIT after a long Unicode run can finish later than
+    // short click receipts; WM_CLOSE is explicitly an asynchronous request.
+    let closing = Instant::now();
+    while unsafe { IsWindow(fixture.handles.window as HWND) } != 0 {
+        assert!(
+            closing.elapsed() < Duration::from_secs(30),
+            "fixture did not finish WM_CLOSE"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
     assert!(matches!(window.title(), Err(Error::WindowNotFound)));
     assert!(matches!(window.activate(), Err(Error::WindowNotFound)));
     // Fixture Drop joins its GUI thread and never closes another application's window.
@@ -652,7 +798,9 @@ fn controls_own_app_on_selected_display() {
     assert!(
         template
             .pixels
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .any(|p| p != &template.pixels[..3])
     );
     let template_path = std::env::temp_dir().join(format!(

@@ -353,7 +353,10 @@ mod platform {
     }
 
     fn ensure_restored(window: &Window) -> Result<()> {
-        if is_maximized(window)? || is_minimized(window)? {
+        if is_minimized(window)? {
+            restore(window)?;
+        }
+        if is_maximized(window)? {
             restore(window)?;
         }
         Ok(())
@@ -406,9 +409,11 @@ mod platform {
         )
     }
     pub fn restore(window: &Window) -> Result<()> {
+        let was_minimized = is_minimized(window)?;
         request_show(window, SW_RESTORE)?;
         wait_state(window, "restore", |hwnd| {
-            Ok(unsafe { IsIconic(hwnd) } == 0 && unsafe { IsZoomed(hwnd) } == 0)
+            // Unminimizing a previously maximized window restores maximization.
+            Ok(unsafe { IsIconic(hwnd) } == 0 && (was_minimized || unsafe { IsZoomed(hwnd) } == 0))
         })
     }
     pub fn close(window: &Window) -> Result<()> {

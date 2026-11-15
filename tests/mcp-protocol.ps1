@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$Executable,[switch]$LiveScreensaver)
 $ErrorActionPreference='Stop'
@@ -58,7 +58,7 @@ try {
     Assert ($before.error.code -eq -32002) 'Pre-initialize request should fail'
     Initialize $client
     $list=Request $client 'tools/list' @{}
-    Assert ($list.result.tools.Count -eq 12) 'Wrong tool count'
+    Assert ($list.result.tools.Count -eq 14) 'Wrong tool count'
     Assert (-not (Loaded $client)) 'DLL loaded just to initialize/list tools'
     $client.Process.StandardInput.WriteLine('{')
     $client.Process.StandardInput.Flush()
@@ -69,6 +69,12 @@ try {
     $invalid=Tool $client type_text @{target='never-existed';text='unused';extra=$true}
     Assert $invalid.isError 'Unknown fields accepted'
     Assert (Loaded $client) 'First tool call did not load runtime DLL'
+    foreach ($name in @('click_at','scroll')) {
+        $arguments=@{target='never-existed';capture_id='never-existed';x=1;y=1}
+        if($name -eq 'scroll'){$arguments.clicks=-3}
+        $withoutCapture=Tool $client $name $arguments
+        Assert ($withoutCapture.isError -and $withoutCapture.content[0].text -match 'capture') 'Pointer input accepted without a capture proof'
+    }
     $status=Tool $client screensaver @{action='status'}
     Assert (-not $status.isError) 'Screensaver status failed through DLL'
     if($LiveScreensaver) {
@@ -96,7 +102,7 @@ Copy-Item -LiteralPath $Executable -Destination $separated
 $client=StartMcp $separated
 try {
     Initialize $client
-    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 12) 'Tool listing requires DLL'
+    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 14) 'Tool listing requires DLL'
     $missing=Tool $client screensaver @{action='status'}
     Assert ($missing.isError -and $missing.content[0].text -match 'autogui_runtime.dll') 'Missing DLL failure unclear'
 } finally {StopMcp $client}

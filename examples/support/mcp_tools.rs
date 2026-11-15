@@ -3,7 +3,10 @@ use super::{
     session, window_command,
 };
 use autogui::{AutoGui, Display, Error, LocateOptions, Rect, Result, Screenshot, Window};
+#[path = "mcp_input.rs"]
+mod input;
 use base64::Engine;
+use input::{CaptureProof, type_chunks};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -109,6 +112,24 @@ struct TypeText {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CapturedPoint {
+    target: String,
+    capture_id: String,
+    x: i32,
+    y: i32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Scroll {
+    target: String,
+    capture_id: String,
+    x: i32,
+    y: i32,
+    clicks: i32,
+    horizontal: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Hotkey {
     target: String,
     keys: Vec<String>,
@@ -127,6 +148,8 @@ pub(crate) struct Session {
     generation: u64,
     displays: HashMap<String, Display>,
     display_generation: u64,
+    capture_generation: u64,
+    capture: Option<CaptureProof>,
     pause: Option<PauseLease>,
 }
 
@@ -167,6 +190,11 @@ impl Session {
         args: Value,
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Value> {
+        // Readiness queries preserve the proof; calls that can change focus,
+        // pixels, targets or display references invalidate it even on failure.
+        if !matches!(name, "click_at" | "scroll" | "session_status") {
+            self.capture = None;
+        }
         match name {
             "displays_list" => {
                 let _: Empty = decode(args)?;
@@ -318,10 +346,78 @@ impl Session {
                     return Err(Error::InvalidArgument("window moved during capture; retry"));
                 }
                 check()?;
-                png(
+                self.capture_generation = self
+                    .capture_generation
+                    .checked_add(1)
+                    .ok_or(Error::InvalidArgument("restart session"))?;
+                let id = format!("c{}", self.capture_generation);
+                let taken = Instant::now();
+                let output = png(
+                    frame.clone(),
+                    json!({"target":a.target,"display":a.display,"region":rect(region),"coordinates":"windows desktop physical pixels","capture_id":id,"pointer_coordinates":"image-relative pixels; origin at captured image top-left","expires_in_seconds":60,"single_use":true}),
+                )?;
+                self.capture = Some(CaptureProof {
+                    id,
+                    target: a.target,
+                    display: a.display,
+                    bounds,
+                    region,
                     frame,
-                    json!({"target":a.target,"display":a.display,"region":rect(region),"coordinates":"windows desktop physical pixels"}),
-                )
+                    taken,
+                });
+                Ok(output)
+            }
+            "click_at" | "scroll" => {
+                let proof = self.capture.take().ok_or(Error::InvalidArgument(
+                    "no unused window capture; call capture first",
+                ))?;
+                let (a, scroll) = if name == "scroll" {
+                    let a: Scroll = decode(args)?;
+                    if a.clicks == 0 || !(-100..=100).contains(&a.clicks) {
+                        return Err(Error::InvalidArgument(
+                            "scroll clicks must be -100..100 and nonzero",
+                        ));
+                    }
+                    (
+                        CapturedPoint {
+                            target: a.target,
+                            capture_id: a.capture_id,
+                            x: a.x,
+                            y: a.y,
+                        },
+                        Some((a.clicks, a.horizontal.unwrap_or(false))),
+                    )
+                } else {
+                    (decode::<CapturedPoint>(args)?, None)
+                };
+                let point = proof.point(&a.target, &a.capture_id, a.x, a.y)?;
+                let window = self.target(&a.target)?;
+                let display = proof
+                    .display
+                    .as_deref()
+                    .map(|key| self.display(key))
+                    .transpose()?;
+                let gui = self.gui()?;
+                proof.verify(gui, &window, display.as_ref(), point, check)?;
+                if let Some(display) = &display {
+                    gui.move_to_display(display, point)?;
+                } else {
+                    gui.move_to_xy(point.x, point.y)?;
+                }
+                proof.verify(gui, &window, display.as_ref(), point, check)?;
+                if gui.position()? != point {
+                    return Err(Error::InvalidArgument(
+                        "cursor moved before input; capture again",
+                    ));
+                }
+                match scroll {
+                    Some((clicks, true)) => gui.hscroll(clicks)?,
+                    Some((clicks, false)) => gui.scroll(clicks)?,
+                    None => gui.click()?,
+                }
+                Ok(text(
+                    json!({"target":a.target,"capture_id":a.capture_id,"x":point.x,"y":point.y,"clicked":scroll.is_none(),"scroll_clicks":scroll.map(|s|s.0),"horizontal":scroll.map(|s|s.1),"note":"input sent; capture again to verify and obtain a new single-use proof"}),
+                ))
             }
             "locate" | "click_image" => {
                 let a: Search = decode(args)?;
@@ -422,11 +518,11 @@ impl Session {
                 let window = self.target(&a.target)?;
                 check()?;
                 window.activate()?;
-                for ch in a.text.chars() {
+                type_chunks(&a.text, |chunk| {
                     check()?;
                     active(&window)?;
-                    self.gui()?.write(&ch.to_string(), Duration::ZERO)?;
-                }
+                    self.gui()?.write(chunk, Duration::ZERO)
+                })?;
                 Ok(text(
                     json!({"characters_sent":count,"note":"input sent; capture/inspect the app to confirm its result"}),
                 ))
@@ -589,6 +685,86 @@ impl Drop for PauseLease {
                     break;
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session {
+            capture: Some(CaptureProof {
+                id: "c1".into(),
+                target: "w1-0".into(),
+                display: None,
+                bounds: Rect::new(10, 10, 20, 20),
+                region: Rect::new(10, 10, 20, 20),
+                frame: Screenshot::solid(20, 20, autogui::Rgb::new(1, 2, 3)),
+                taken: Instant::now(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn invalid_pointer_attempts_consume_latest_capture_without_input() {
+        for (name, args) in [
+            (
+                "click_at",
+                json!({"target":"w2-0","capture_id":"c1","x":1,"y":1}),
+            ),
+            (
+                "click_at",
+                json!({"target":"w1-0","capture_id":"c0","x":1,"y":1}),
+            ),
+            (
+                "click_at",
+                json!({"target":"w1-0","capture_id":"c1","x":20,"y":1}),
+            ),
+            (
+                "click_at",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"extra":true}),
+            ),
+            (
+                "scroll",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"clicks":0}),
+            ),
+            (
+                "scroll",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"clicks":101}),
+            ),
+        ] {
+            let mut s = session();
+            assert!(s.call(name, args.clone(), &|| Ok(())).is_err());
+            assert!(s.capture.is_none());
+            assert!(s.gui.is_none());
+            assert!(matches!(
+                s.call(name, args, &|| Ok(())),
+                Err(Error::InvalidArgument(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn other_tool_calls_invalidate_capture_even_if_arguments_fail() {
+        for name in [
+            "windows_list",
+            "displays_list",
+            "capture",
+            "display_capture",
+            "window_control",
+            "window_to_display",
+            "locate",
+            "click_image",
+            "type_text",
+            "hotkey",
+        ] {
+            let mut s = session();
+            assert!(s.call(name, json!({"extra":true}), &|| Ok(())).is_err());
+            assert!(s.capture.is_none());
+            assert!(s.gui.is_none());
         }
     }
 }
