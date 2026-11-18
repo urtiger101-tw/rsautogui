@@ -1,12 +1,15 @@
 use super::{
-    active, capture_region, display_command, locate_target, scaled_template, screen_region,
-    session, window_command,
+    active, capture_region, desktop, display_command, locate_target, scaled_template,
+    screen_region, session, window_command,
 };
-use autogui::{AutoGui, Display, Error, LocateOptions, Rect, Result, Screenshot, Window};
+use autogui::{
+    AutoGui, Display, Error, FakeBackend, LocateOptions, MouseButton, Point, Rect, Result,
+    Screenshot, Window,
+};
 #[path = "mcp_input.rs"]
 mod input;
 use base64::Engine;
-use input::{CaptureProof, type_chunks};
+use input::{CaptureProof, drag_path, type_chunks};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -45,6 +48,54 @@ fn info(window: &Window) -> Result<Value> {
         "active":window.is_active()?,"minimized":window.is_minimized()?,"maximized":window.is_maximized()?}),
     )
 }
+/// Error text for agents: the original message plus a recovery hint.
+pub(crate) fn describe(error: &Error) -> String {
+    let message = error.to_string();
+    let hint = match error {
+        _ if message.contains("cancelled") => {
+            "request was cancelled or the client disconnected; no further input was sent"
+        }
+        Error::WindowNotFound => {
+            "the window closed or changed identity; re-run windows_list (or window_wait) for fresh targets"
+        }
+        Error::PermissionDenied(m) if m.contains("SetForegroundWindow") => {
+            "Windows foreground lock or an elevated (administrator) window refused focus; retry window_control activate, or use display_capture then click_at with display to click the window directly"
+        }
+        Error::PermissionDenied(m) if m.contains("foreground") => {
+            "another window took focus; re-run capture (which activates the target) before sending input"
+        }
+        Error::PermissionDenied(m) if m.contains("AUTOGUI_ALLOW_LAUNCH") => {
+            "the user must start the MCP server with AUTOGUI_ALLOW_LAUNCH=1 to allow app_launch"
+        }
+        Error::PermissionDenied(_) => {
+            "the target may be elevated or on a secure desktop; run the agent at the same integrity level"
+        }
+        Error::FailSafe(_) => {
+            "the cursor is on a primary-monitor corner (fail-safe); move it off the corner, then retry"
+        }
+        Error::ImageNotFound => {
+            "call capture to confirm the template is visible; check scale (DPI/zoom) and confidence, or use a more distinctive template"
+        }
+        Error::UnsupportedPlatform => "this tool works only on Windows",
+        Error::FeatureDisabled(_) => "install an autogui-control build with this feature enabled",
+        Error::Input(_) => {
+            "the input backend failed; run session_status to check for a locked, disconnected or secure desktop"
+        }
+        Error::Screenshot(_) => {
+            "screen capture failed; run session_status to check for a locked, disconnected or display-less session"
+        }
+        Error::Io(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            "the window did not reach the state in time; raise timeout or check title/process with windows_list"
+        }
+        Error::InvalidArgument(_) | Error::Io(_) => "",
+    };
+    if hint.is_empty() {
+        message
+    } else {
+        format!("{message}. Hint: {hint}")
+    }
+}
+
 fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(|e| Error::Input(format!("invalid tool arguments: {e}")))
 }
@@ -53,6 +104,26 @@ fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T> {
 #[serde(deny_unknown_fields)]
 struct List {
     title: Option<String>,
+    process: Option<String>,
+    foreground: Option<bool>,
+    titled_only: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowWait {
+    title: Option<String>,
+    process: Option<String>,
+    state: String,
+    timeout: Option<f64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppLaunch {
+    path: String,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    wait_title: Option<String>,
+    timeout: Option<f64>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,15 +184,41 @@ struct TypeText {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CapturedPoint {
-    target: String,
+    target: Option<String>,
+    display: Option<String>,
+    capture_id: String,
+    x: i32,
+    y: i32,
+    button: Option<String>,
+    clicks: Option<u32>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PointerMove {
+    target: Option<String>,
+    display: Option<String>,
     capture_id: String,
     x: i32,
     y: i32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Drag {
+    target: Option<String>,
+    display: Option<String>,
+    capture_id: String,
+    x: i32,
+    y: i32,
+    to_x: i32,
+    to_y: i32,
+    button: Option<String>,
+    duration_ms: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Scroll {
-    target: String,
+    target: Option<String>,
+    display: Option<String>,
     capture_id: String,
     x: i32,
     y: i32,
@@ -133,6 +230,155 @@ struct Scroll {
 struct Hotkey {
     target: String,
     keys: Vec<String>,
+    presses: Option<u32>,
+}
+
+/// What a capture-bound pointer call will do once its proof is verified.
+enum PointerAction {
+    Click(MouseButton, u32),
+    Scroll(i32, bool),
+    Move,
+    Drag(Point, MouseButton, Duration),
+}
+struct PointerCall {
+    target: Option<String>,
+    display: Option<String>,
+    capture_id: String,
+    x: i32,
+    y: i32,
+    action: PointerAction,
+    /// Drag destination in image-relative pixels.
+    to: Option<(i32, i32)>,
+}
+
+fn pointer_call(name: &str, args: Value) -> Result<PointerCall> {
+    Ok(match name {
+        "scroll" => {
+            let a: Scroll = decode(args)?;
+            if a.clicks == 0 || !(-100..=100).contains(&a.clicks) {
+                return Err(Error::InvalidArgument(
+                    "scroll clicks must be -100..100 and nonzero",
+                ));
+            }
+            PointerCall {
+                target: a.target,
+                display: a.display,
+                capture_id: a.capture_id,
+                x: a.x,
+                y: a.y,
+                action: PointerAction::Scroll(a.clicks, a.horizontal.unwrap_or(false)),
+                to: None,
+            }
+        }
+        "pointer_move" => {
+            let a: PointerMove = decode(args)?;
+            PointerCall {
+                target: a.target,
+                display: a.display,
+                capture_id: a.capture_id,
+                x: a.x,
+                y: a.y,
+                action: PointerAction::Move,
+                to: None,
+            }
+        }
+        "drag" => {
+            let a: Drag = decode(args)?;
+            let duration = a.duration_ms.unwrap_or(300);
+            if duration > 5000 {
+                return Err(Error::InvalidArgument("duration_ms must be 0..5000"));
+            }
+            PointerCall {
+                target: a.target,
+                display: a.display,
+                capture_id: a.capture_id,
+                x: a.x,
+                y: a.y,
+                action: PointerAction::Drag(
+                    Point::new(0, 0), // replaced by the mapped destination
+                    input::button(a.button.as_deref())?,
+                    Duration::from_millis(duration),
+                ),
+                to: Some((a.to_x, a.to_y)),
+            }
+        }
+        _ => {
+            let a: CapturedPoint = decode(args)?;
+            let clicks = a.clicks.unwrap_or(1);
+            if !(1..=3).contains(&clicks) {
+                return Err(Error::InvalidArgument("clicks must be 1..3"));
+            }
+            PointerCall {
+                target: a.target,
+                display: a.display,
+                capture_id: a.capture_id,
+                x: a.x,
+                y: a.y,
+                action: PointerAction::Click(input::button(a.button.as_deref())?, clicks),
+                to: None,
+            }
+        }
+    })
+}
+
+/// Moves a held button from `from` to `to`. The primary display uses one
+/// linear tween; an explicit display moves in three validated steps.
+fn drag_move(
+    gui: &mut AutoGui,
+    display: Option<&Display>,
+    from: Point,
+    to: Point,
+    duration: Duration,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    check()?;
+    match display {
+        None => gui.move_to(to.x, to.y, duration, autogui::tweens::linear)?,
+        Some(display) => {
+            for point in drag_path(from, to, 3) {
+                check()?;
+                std::thread::sleep(duration / 3);
+                gui.move_to_display(display, point)?;
+            }
+        }
+    }
+    check()
+}
+
+/// Rejects unknown key names using a throwaway fake backend, so validation
+/// never activates a window or sends input.
+fn validate_keys(keys: &[&str]) -> Result<()> {
+    let mut fake = AutoGui::with_fake(FakeBackend::new(1, 1));
+    fake.settings_mut().failsafe = false;
+    fake.settings_mut().pause = Duration::ZERO;
+    fake.hotkey(keys)
+}
+
+fn window_filter(
+    title: Option<String>,
+    process: Option<String>,
+    foreground: bool,
+    titled_only: bool,
+) -> Result<desktop::WindowFilter> {
+    if title.as_ref().is_some_and(|t| t.chars().count() > 256)
+        || process.as_ref().is_some_and(|p| p.chars().count() > 260)
+    {
+        return Err(Error::InvalidArgument("title/process filter is too long"));
+    }
+    Ok(desktop::WindowFilter {
+        title,
+        process,
+        foreground,
+        titled_only,
+    })
+}
+
+fn wait_timeout(timeout: Option<f64>, default: f64) -> Result<Duration> {
+    let timeout = timeout.unwrap_or(default);
+    if !(0.0..=30.0).contains(&timeout) {
+        return Err(Error::InvalidArgument("timeout must be 0..30 seconds"));
+    }
+    Ok(Duration::from_secs_f64(timeout))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -177,6 +423,43 @@ impl Session {
         window.title()?; // validates captured HWND plus originating process/thread identity
         Ok(window.clone())
     }
+    /// Replaces all window targets with a new generation, like windows_list.
+    fn register(
+        &mut self,
+        windows: Vec<Window>,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Vec<Value>> {
+        if windows.len() > 512 {
+            return Err(Error::InvalidArgument("over 512 windows; filter by title"));
+        }
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(Error::InvalidArgument("restart session"))?;
+        self.targets.clear();
+        let mut results = Vec::new();
+        for (index, window) in windows.into_iter().enumerate() {
+            check()?;
+            let mut detail = match info(&window) {
+                Ok(v) => v,
+                Err(Error::WindowNotFound) => continue,
+                Err(e) => return Err(e),
+            };
+            let process = desktop::process_info(window.hwnd());
+            detail["pid"] = json!(process.as_ref().map(|p| p.0));
+            detail["process"] = json!(
+                process
+                    .as_ref()
+                    .map(|p| { p.1.rsplit(['\\', '/']).next().unwrap_or(&p.1).to_owned() })
+            );
+            detail["class"] = json!(desktop::class_name(window.hwnd()));
+            let key = format!("w{}-{index}", self.generation);
+            detail["target"] = json!(key);
+            self.targets.insert(key, window);
+            results.push(detail);
+        }
+        Ok(results)
+    }
     fn display(&self, key: &str) -> Result<Display> {
         let display = self.displays.get(key).ok_or(Error::InvalidArgument(
             "unknown/stale display; call displays_list again",
@@ -192,7 +475,10 @@ impl Session {
     ) -> Result<Value> {
         // Readiness queries preserve the proof; calls that can change focus,
         // pixels, targets or display references invalidate it even on failure.
-        if !matches!(name, "click_at" | "scroll" | "session_status") {
+        if !matches!(
+            name,
+            "click_at" | "scroll" | "pointer_move" | "drag" | "cursor_position" | "session_status"
+        ) {
             self.capture = None;
         }
         match name {
@@ -241,10 +527,27 @@ impl Session {
                 check()?;
                 let frame = self.gui()?.screenshot_display_region(&display, region)?;
                 check()?;
-                png(
+                self.capture_generation = self
+                    .capture_generation
+                    .checked_add(1)
+                    .ok_or(Error::InvalidArgument("restart session"))?;
+                let id = format!("c{}", self.capture_generation);
+                let taken = Instant::now();
+                let output = png(
+                    frame.clone(),
+                    json!({"display":a.display,"device_name":display.name(),"region":rect(region),"coordinates":"windows desktop physical pixels","capture_id":id,"pointer_coordinates":"image-relative pixels; origin at captured image top-left; use with display (not target)","expires_in_seconds":60,"single_use":true}),
+                )?;
+                // Screen-level proof: no window, bounds are the captured region.
+                self.capture = Some(CaptureProof {
+                    id,
+                    target: None,
+                    display: Some(a.display),
+                    bounds: region,
+                    region,
                     frame,
-                    json!({"display":a.display,"device_name":display.name(),"region":rect(region),"coordinates":"windows desktop physical pixels"}),
-                )
+                    taken,
+                });
+                Ok(output)
             }
             "window_to_display" => {
                 let a: DisplayMove = decode(args)?;
@@ -259,35 +562,82 @@ impl Session {
                 ))
             }
             "windows_list" => {
-                let args: List = decode(args)?;
-                let windows = if let Some(title) = args.title {
-                    self.gui()?.get_windows_with_title_ci(&title)?
-                } else {
-                    self.gui()?.get_all_windows()?
-                };
-                if windows.len() > 512 {
-                    return Err(Error::InvalidArgument("over 512 windows; filter by title"));
-                }
-                self.generation = self
-                    .generation
-                    .checked_add(1)
-                    .ok_or(Error::InvalidArgument("restart session"))?;
-                self.targets.clear();
-                let mut results = Vec::new();
-                for (index, window) in windows.into_iter().enumerate() {
-                    check()?;
-                    let mut detail = match info(&window) {
-                        Ok(v) => v,
-                        Err(Error::WindowNotFound) => continue,
-                        Err(e) => return Err(e),
-                    };
-                    let key = format!("w{}-{index}", self.generation);
-                    detail["target"] = json!(key);
-                    self.targets.insert(key, window);
-                    results.push(detail);
-                }
+                let a: List = decode(args)?;
+                let filter = window_filter(
+                    a.title,
+                    a.process,
+                    a.foreground.unwrap_or(false),
+                    a.titled_only.unwrap_or(false),
+                )?;
+                check()?;
+                let windows = desktop::list(self.gui()?, &filter)?;
+                let results = self.register(windows, check)?;
                 Ok(text(
                     json!({"windows":results,"coordinates":"windows desktop physical pixels; origin at primary top-left"}),
+                ))
+            }
+            "window_wait" => {
+                let a: WindowWait = decode(args)?;
+                let state = desktop::WaitState::parse(&a.state)?;
+                let timeout = wait_timeout(a.timeout, 5.0)?;
+                if a.title.as_deref().is_none_or(str::is_empty)
+                    && a.process.as_deref().is_none_or(str::is_empty)
+                {
+                    return Err(Error::InvalidArgument("window_wait needs title or process"));
+                }
+                let filter = window_filter(a.title, a.process, false, false)?;
+                let start = Instant::now();
+                let windows = desktop::wait(self.gui()?, &filter, state, timeout, check)?;
+                let results = self.register(windows, check)?;
+                Ok(text(
+                    json!({"state":a.state,"elapsed_ms":start.elapsed().as_millis() as u64,"windows":results,"note":"targets refreshed; previous targets are invalid"}),
+                ))
+            }
+            "app_launch" => {
+                let a: AppLaunch = decode(args)?;
+                let timeout = wait_timeout(a.timeout, 10.0)?;
+                if a.wait_title.as_deref().is_some_and(|t| t.trim().is_empty()) {
+                    return Err(Error::InvalidArgument("wait_title must not be empty"));
+                }
+                let launch = desktop::Launch {
+                    path: a.path,
+                    args: a.args.unwrap_or_default(),
+                    cwd: a.cwd,
+                };
+                check()?;
+                let pid = desktop::launch(&launch)?;
+                let Some(title) = a.wait_title else {
+                    return Ok(text(
+                        json!({"pid":pid,"note":"process started; use window_wait or windows_list to find its window"}),
+                    ));
+                };
+                let filter = window_filter(Some(title), None, false, false)?;
+                let windows = desktop::wait(
+                    self.gui()?,
+                    &filter,
+                    desktop::WaitState::Present,
+                    timeout,
+                    check,
+                )
+                // Keep the variant/kind so describe() adds the matching hint once.
+                .map_err(|e| match e {
+                    Error::Io(e) => Error::Io(std::io::Error::new(
+                        e.kind(),
+                        format!("process {pid} started, but {e}"),
+                    )),
+                    e => e,
+                })?;
+                let results = self.register(windows, check)?;
+                Ok(text(
+                    json!({"pid":pid,"windows":results,"note":"targets refreshed; window may belong to a different process than pid"}),
+                ))
+            }
+            "cursor_position" => {
+                let _: Empty = decode(args)?;
+                check()?;
+                let point = self.gui()?.position()?;
+                Ok(text(
+                    json!({"x":point.x,"y":point.y,"coordinates":"windows desktop physical pixels; origin at primary top-left"}),
                 ))
             }
             "window_control" => {
@@ -358,7 +708,7 @@ impl Session {
                 )?;
                 self.capture = Some(CaptureProof {
                     id,
-                    target: a.target,
+                    target: Some(a.target),
                     display: a.display,
                     bounds,
                     region,
@@ -367,57 +717,80 @@ impl Session {
                 });
                 Ok(output)
             }
-            "click_at" | "scroll" => {
+            "click_at" | "scroll" | "pointer_move" | "drag" => {
                 let proof = self.capture.take().ok_or(Error::InvalidArgument(
-                    "no unused window capture; call capture first",
+                    "no unused capture; call capture or display_capture first",
                 ))?;
-                let (a, scroll) = if name == "scroll" {
-                    let a: Scroll = decode(args)?;
-                    if a.clicks == 0 || !(-100..=100).contains(&a.clicks) {
-                        return Err(Error::InvalidArgument(
-                            "scroll clicks must be -100..100 and nonzero",
-                        ));
-                    }
-                    (
-                        CapturedPoint {
-                            target: a.target,
-                            capture_id: a.capture_id,
-                            x: a.x,
-                            y: a.y,
-                        },
-                        Some((a.clicks, a.horizontal.unwrap_or(false))),
-                    )
-                } else {
-                    (decode::<CapturedPoint>(args)?, None)
-                };
-                let point = proof.point(&a.target, &a.capture_id, a.x, a.y)?;
-                let window = self.target(&a.target)?;
+                let mut a = pointer_call(name, args)?;
+                let (target, display_key) = (a.target.as_deref(), a.display.as_deref());
+                let point = proof.point(target, display_key, &a.capture_id, a.x, a.y)?;
+                if let (PointerAction::Drag(to, _, _), Some((x, y))) = (&mut a.action, a.to) {
+                    *to = proof.point(target, display_key, &a.capture_id, x, y)?;
+                }
+                let window = proof
+                    .target
+                    .as_deref()
+                    .map(|key| self.target(key))
+                    .transpose()?;
                 let display = proof
                     .display
                     .as_deref()
                     .map(|key| self.display(key))
                     .transpose()?;
                 let gui = self.gui()?;
-                proof.verify(gui, &window, display.as_ref(), point, check)?;
+                proof.verify(gui, window.as_ref(), display.as_ref(), point, check)?;
+                if let PointerAction::Drag(to, _, _) = a.action {
+                    proof.verify(gui, window.as_ref(), display.as_ref(), to, check)?;
+                }
                 if let Some(display) = &display {
                     gui.move_to_display(display, point)?;
                 } else {
                     gui.move_to_xy(point.x, point.y)?;
                 }
-                proof.verify(gui, &window, display.as_ref(), point, check)?;
+                proof.verify(gui, window.as_ref(), display.as_ref(), point, check)?;
                 if gui.position()? != point {
                     return Err(Error::InvalidArgument(
                         "cursor moved before input; capture again",
                     ));
                 }
-                match scroll {
-                    Some((clicks, true)) => gui.hscroll(clicks)?,
-                    Some((clicks, false)) => gui.scroll(clicks)?,
-                    None => gui.click()?,
+                let mut detail = json!({"target":a.target,"display":a.display,"capture_id":a.capture_id,"x":point.x,"y":point.y,"note":"input sent; capture again to verify and obtain a new single-use proof"});
+                match a.action {
+                    PointerAction::Scroll(clicks, horizontal) => {
+                        if horizontal {
+                            gui.hscroll(clicks)?;
+                        } else {
+                            gui.scroll(clicks)?;
+                        }
+                        detail["scroll_clicks"] = json!(clicks);
+                        detail["horizontal"] = json!(horizontal);
+                    }
+                    PointerAction::Click(button, clicks) => {
+                        gui.click_ex(None, None, clicks, Duration::from_millis(50), button)?;
+                        detail["clicked"] = json!(true);
+                        detail["button"] = json!(format!("{button:?}").to_lowercase());
+                        detail["clicks"] = json!(clicks);
+                    }
+                    PointerAction::Move => {
+                        detail["moved"] = json!(true);
+                        detail["note"] = json!("cursor moved; no button or wheel input sent");
+                    }
+                    PointerAction::Drag(to, button, duration) => {
+                        check()?;
+                        if let Some(window) = &window {
+                            active(window)?;
+                        }
+                        gui.mouse_down(button)?;
+                        // The button is released on every path, including errors.
+                        let moved = drag_move(gui, display.as_ref(), point, to, duration, check);
+                        let released = gui.mouse_up(button);
+                        moved?;
+                        released?;
+                        detail["dragged"] = json!(true);
+                        detail["to"] = json!({"x":to.x,"y":to.y});
+                        detail["button"] = json!(format!("{button:?}").to_lowercase());
+                    }
                 }
-                Ok(text(
-                    json!({"target":a.target,"capture_id":a.capture_id,"x":point.x,"y":point.y,"clicked":scroll.is_none(),"scroll_clicks":scroll.map(|s|s.0),"horizontal":scroll.map(|s|s.1),"note":"input sent; capture again to verify and obtain a new single-use proof"}),
-                ))
+                Ok(text(detail))
             }
             "locate" | "click_image" => {
                 let a: Search = decode(args)?;
@@ -537,14 +910,22 @@ impl Session {
                         "use 1..8 canonical keys, e.g. ctrl,a or enter",
                     ));
                 }
+                let presses = a.presses.unwrap_or(1);
+                if !(1..=50).contains(&presses) {
+                    return Err(Error::InvalidArgument("presses must be 1..50"));
+                }
+                let keys: Vec<&str> = a.keys.iter().map(String::as_str).collect();
+                // Unknown key names fail here, before focus changes.
+                validate_keys(&keys)?;
                 let window = self.target(&a.target)?;
                 check()?;
                 window.activate()?;
-                active(&window)?;
-                check()?;
-                self.gui()?
-                    .hotkey(&a.keys.iter().map(String::as_str).collect::<Vec<_>>())?;
-                Ok(text(json!({"keys_sent":a.keys})))
+                for _ in 0..presses {
+                    active(&window)?;
+                    check()?;
+                    self.gui()?.hotkey(&keys)?;
+                }
+                Ok(text(json!({"keys_sent":a.keys,"presses":presses})))
             }
             "screensaver" => {
                 let a: Saver = decode(args)?;
@@ -604,7 +985,7 @@ impl super::mcp::Handler for Session {
         check: &dyn Fn() -> std::io::Result<()>,
     ) -> std::io::Result<Value> {
         self.call(name, args, &|| check().map_err(Error::Io))
-            .map_err(std::io::Error::other)
+            .map_err(|e| std::io::Error::other(describe(&e)))
     }
 }
 
@@ -697,7 +1078,7 @@ mod tests {
         Session {
             capture: Some(CaptureProof {
                 id: "c1".into(),
-                target: "w1-0".into(),
+                target: Some("w1-0".into()),
                 display: None,
                 bounds: Rect::new(10, 10, 20, 20),
                 region: Rect::new(10, 10, 20, 20),
@@ -735,6 +1116,56 @@ mod tests {
                 "scroll",
                 json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"clicks":101}),
             ),
+            (
+                "click_at",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"button":"back"}),
+            ),
+            (
+                "click_at",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"clicks":0}),
+            ),
+            (
+                "click_at",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"clicks":4}),
+            ),
+            (
+                "click_at",
+                json!({"display":"d1-0","capture_id":"c1","x":1,"y":1}),
+            ),
+            (
+                "click_at",
+                json!({"target":"w1-0","display":"d1-0","capture_id":"c1","x":1,"y":1}),
+            ),
+            ("click_at", json!({"capture_id":"c1","x":1,"y":1})),
+            (
+                "pointer_move",
+                json!({"target":"w1-0","capture_id":"c1","x":20,"y":1}),
+            ),
+            (
+                "pointer_move",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"button":"left"}),
+            ),
+            (
+                "drag",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"to_x":20,"to_y":1}),
+            ),
+            (
+                "drag",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"to_x":1,"to_y":-1}),
+            ),
+            (
+                "drag",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"to_x":2,"to_y":2,"duration_ms":5001}),
+            ),
+            (
+                "drag",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"to_x":2,"to_y":2,"button":"x"}),
+            ),
+            // Valid arguments, but the target was never listed in this session.
+            (
+                "drag",
+                json!({"target":"w1-0","capture_id":"c1","x":1,"y":1,"to_x":2,"to_y":2}),
+            ),
         ] {
             let mut s = session();
             assert!(s.call(name, args.clone(), &|| Ok(())).is_err());
@@ -760,11 +1191,200 @@ mod tests {
             "click_image",
             "type_text",
             "hotkey",
+            "window_wait",
+            "app_launch",
         ] {
             let mut s = session();
             assert!(s.call(name, json!({"extra":true}), &|| Ok(())).is_err());
             assert!(s.capture.is_none());
             assert!(s.gui.is_none());
+        }
+    }
+
+    #[test]
+    fn readiness_queries_preserve_the_proof() {
+        for name in ["cursor_position", "session_status"] {
+            let mut s = session();
+            // Outcome depends on the desktop; the proof must survive either way.
+            let _ = s.call(name, json!({}), &|| Ok(()));
+            assert!(s.capture.is_some(), "{name} consumed the proof");
+            let mut s = session();
+            assert!(s.call(name, json!({"extra":true}), &|| Ok(())).is_err());
+            assert!(s.capture.is_some());
+        }
+    }
+
+    fn display_session() -> Session {
+        let mut s = session();
+        if let Some(proof) = s.capture.as_mut() {
+            proof.target = None;
+            proof.display = Some("d1-0".into());
+        }
+        s
+    }
+
+    #[test]
+    fn display_proof_requires_matching_display_key() {
+        for args in [
+            json!({"display":"d1-1","capture_id":"c1","x":1,"y":1}),
+            json!({"target":"w1-0","capture_id":"c1","x":1,"y":1}),
+            json!({"display":"d1-0","target":"w1-0","capture_id":"c1","x":1,"y":1}),
+            // Matching key, but no display was listed in this session.
+            json!({"display":"d1-0","capture_id":"c1","x":1,"y":1}),
+        ] {
+            let mut s = display_session();
+            assert!(matches!(
+                s.call("click_at", args, &|| Ok(())),
+                Err(Error::InvalidArgument(_))
+            ));
+            assert!(s.capture.is_none());
+            assert!(s.gui.is_none());
+        }
+    }
+
+    #[test]
+    fn hotkey_validates_keys_and_presses_before_focus() {
+        let mut s = session();
+        let unknown = s.call(
+            "hotkey",
+            json!({"target":"w1-0","keys":["ctrl","notakey"]}),
+            &|| Ok(()),
+        );
+        assert!(matches!(
+            unknown,
+            Err(Error::InvalidArgument("unknown key"))
+        ));
+        assert!(s.gui.is_none());
+        for presses in [0, 51] {
+            let mut s = session();
+            let result = s.call(
+                "hotkey",
+                json!({"target":"w1-0","keys":["enter"],"presses":presses}),
+                &|| Ok(()),
+            );
+            assert!(matches!(
+                result,
+                Err(Error::InvalidArgument("presses must be 1..50"))
+            ));
+            assert!(s.gui.is_none());
+        }
+        // Valid keys pass validation and reach the (unlisted) target lookup.
+        let mut s = session();
+        let stale = s.call(
+            "hotkey",
+            json!({"target":"w1-0","keys":["ctrl","a"],"presses":50}),
+            &|| Ok(()),
+        );
+        assert!(matches!(stale, Err(Error::InvalidArgument(m)) if m.contains("stale target")));
+        assert!(validate_keys(&["ctrl", "shift", "esc"]).is_ok());
+    }
+
+    #[test]
+    fn window_wait_and_launch_reject_bad_arguments_without_backend() {
+        for (name, args) in [
+            ("window_wait", json!({"title":"x","state":"gone"})),
+            (
+                "window_wait",
+                json!({"title":"x","state":"present","timeout":31}),
+            ),
+            ("window_wait", json!({"state":"present"})),
+            (
+                "window_wait",
+                json!({"title":"","process":"","state":"absent"}),
+            ),
+            ("windows_list", json!({"process":"x".repeat(261)})),
+            ("app_launch", json!({"path":"C:\\x.exe","timeout":-1})),
+            ("app_launch", json!({"path":"C:\\x.exe","wait_title":" "})),
+            (
+                "app_launch",
+                json!({"path":"C:\\x.exe","args":"not-an-array"}),
+            ),
+        ] {
+            let mut s = session();
+            assert!(
+                matches!(
+                    s.call(name, args.clone(), &|| Ok(())),
+                    Err(Error::InvalidArgument(_)) | Err(Error::Input(_))
+                ),
+                "{name} {args}"
+            );
+            assert!(s.gui.is_none());
+        }
+        let mut s = Session::default();
+        let result = s.call("app_launch", json!({"path":"notepad.exe"}), &|| Ok(()));
+        if desktop::launch_allowed() {
+            assert!(matches!(result, Err(Error::InvalidArgument(_))));
+        } else {
+            assert!(
+                matches!(result, Err(Error::PermissionDenied(m)) if m.contains("AUTOGUI_ALLOW_LAUNCH"))
+            );
+        }
+        assert!(s.gui.is_none());
+    }
+
+    #[test]
+    fn cancellation_stops_windows_list_before_backend() {
+        let mut s = session();
+        let cancelled = || {
+            Err(Error::Input(
+                "request cancelled or client disconnected".into(),
+            ))
+        };
+        assert!(
+            s.call("windows_list", json!({"title":"x"}), &cancelled)
+                .is_err()
+        );
+        assert!(s.gui.is_none());
+    }
+
+    #[test]
+    fn describe_adds_recovery_hints_per_variant() {
+        let cases: Vec<(Error, &str)> = vec![
+            (Error::WindowNotFound, "windows_list"),
+            (
+                Error::PermissionDenied("SetForegroundWindow"),
+                "display_capture",
+            ),
+            (
+                Error::PermissionDenied("target window lost foreground focus"),
+                "capture",
+            ),
+            (
+                Error::PermissionDenied("app_launch disabled; set AUTOGUI_ALLOW_LAUNCH=1"),
+                "AUTOGUI_ALLOW_LAUNCH=1 to allow",
+            ),
+            (Error::PermissionDenied("other"), "integrity"),
+            (Error::FailSafe(Point::new(0, 0)), "corner"),
+            (Error::ImageNotFound, "scale"),
+            (Error::UnsupportedPlatform, "Windows"),
+            (Error::FeatureDisabled("opencv"), "feature"),
+            (Error::Input("enigo".into()), "session_status"),
+            (Error::Screenshot("dxgi".into()), "session_status"),
+            (
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timed out waiting for window state",
+                )),
+                "raise timeout",
+            ),
+            (
+                Error::Io(std::io::Error::other(
+                    "request cancelled or client disconnected",
+                )),
+                "no further input",
+            ),
+        ];
+        for (error, hint) in cases {
+            let text = describe(&error);
+            assert!(text.starts_with(&error.to_string()), "{text}");
+            assert!(text.contains("Hint: "), "{text}");
+            assert!(text.contains(hint), "{text}");
+        }
+        for error in [
+            Error::InvalidArgument("capture expired; capture again"),
+            Error::Io(std::io::Error::other("disk")),
+        ] {
+            assert_eq!(describe(&error), error.to_string());
         }
     }
 }

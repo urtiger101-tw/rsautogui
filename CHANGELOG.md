@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added MCP `pointer_move`, `drag` and `cursor_position`, and `click_at` accepts `button` (left/right/middle) and `clicks` (1-3). Pointer actions reuse the latest single-use capture proof and its pre-input checks.
+- Added MCP `window_wait` (present/absent/foreground, timeout up to 30 s) and `app_launch`. `app_launch` is disabled unless the MCP process sets `AUTOGUI_ALLOW_LAUNCH=1`, and accepts only an existing absolute `.exe`.
+- `display_capture` returns a `capture_id`, so screen-level pointer actions can use a display proof; pointer tools take exactly one of `target` or `display`.
+- `windows_list` accepts `process`, `foreground` and `titled_only` filters and reports `pid`, `process` and `class`. `hotkey` validates key names before activating the target window and accepts `presses` (1-50).
+- Tool errors include recovery hints, for example re-running `windows_list` after `WindowNotFound`.
+- Added an Inno Setup per-user installer (`installer/autogui.iss`), built with `scripts/package.ps1 -Installer` (version from `Cargo.toml`, requires Inno Setup 6). It installs only to `%LOCALAPPDATA%\Programs\AutoGui` through `install.ps1`, accepts silent `/TASKS` host selection, and removes an existing installation with its own `uninstall.ps1` before upgrading.
 - Fixed installation with existing empty/whitespace MCP JSON while preserving byte-exact uninstall backups. Antigravity skills now default to the shared `.gemini/config/skills`; `-AgySkillRoot` supports legacy/custom locations.
 - Fixed restore timing out when a minimized window returns to its previous maximized state; move/resize and display placement still explicitly normalize the window first.
 - Added MCP `click_at` and vertical/horizontal `scroll`, bound to the latest single-use window capture for 60 seconds. Input checks target identity, foreground, geometry, display, cursor and a local pixel patch before dispatch; invalid attempts also consume the proof.

@@ -1,5 +1,19 @@
 # Agent / DLL 交付驗證
 
+## 2026-11-19：Inno Setup 安裝程式與文件更新
+
+環境：Windows 11 Pro 10.0.22631 x64；Inno Setup 6.7.3 Command-line Compiler（ISCC.exe）；Windows PowerShell 5.1；本機 Rust/Cargo 工具鏈。此段只記錄安裝程式與文件；桌面操作工具的 live 驗證另見各自段落。
+
+- PASS：`cargo build --release --workspace --all-features --locked`（exit 0）。
+- PASS：`scripts\package.ps1 -SkipBuild -Installer -OutputDir .agent\pkg-test-<id>`，ISCC exit 0，產生 `.agent\AutoGui-0.1.0-setup.exe`（3,640,426 bytes）。安裝程式輸出位於 OutputDir 的上一層，不在 payload 內。
+- PASS：`tests\inno-setup.ps1 -PackageRoot .agent\pkg-test-<id>`。使用測試用 AppId，只安裝到 `.agent\inno-test-*\program`，不選任何 Agent 任務。覆蓋全新安裝、同 AppId 升級、解除安裝（程式檔與使用者註冊表項移除、還原備份保留於 `program.recovery-*`）以及目錄衝突（Setup exit 1，使用者檔案保留）。
+- PASS：`tests\installer.ps1 -PackageRoot .agent\pkg-test-<id>`，既有隔離安裝器測試，結果不變。
+- PASS：`cargo test --workspace --all-features`（exit 0）；`cargo clippy --workspace --all-targets --all-features -- -D warnings`（exit 0）。
+- PASS：`cargo fmt --all -- --check`（exit 0）。安裝程式交付當下曾在編輯中的 `examples\support\mcp_input.rs` 與 `mcp_tools.rs` 報告格式差異；MCP 變更完成並經審查後重新執行，三項 gate 均為 exit 0。
+- NOT_RUN：Setup 精靈互動畫面；安裝時選取 Agent 任務（`/TASKS`）的執行期行為，因為會寫入使用者設定檔，只完成 ISCC 編譯驗證；真實使用者安裝目錄 %LOCALAPPDATA%\Programs\AutoGui 未被測試。
+
+MCP 工具數目標為 19（`pointer_move`、`drag`、`cursor_position`、`window_wait`、`app_launch` 為新增），下方 2026-11-15 段落的 14 工具是當時的結果，保留為歷史紀錄。
+
 ## 2026-11-15：Flow 操作改善
 
 環境：Windows x64、互動主控台、1920×1080 主螢幕；Rust/Cargo 1.99.0、Windows PowerShell 5.1。驗證使用自有原生測試視窗，沒有操作瀏覽器帳號或送出生成請求。

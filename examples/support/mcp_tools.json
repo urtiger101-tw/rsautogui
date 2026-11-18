@@ -32,7 +32,7 @@
   },
   {
     "name": "display_capture",
-    "description": "Capture a real PNG from a selected physical or IDD virtual display without activating a window. Default is the full display. A supplied region uses global desktop physical pixels and must fit entirely inside it; at most 16 megapixels.",
+    "description": "Capture a real PNG from a selected physical or IDD virtual display without activating a window. Default is the full display. A supplied region uses global desktop physical pixels and must fit entirely inside it; at most 16 megapixels. Returns a screen-level capture_id for one click_at/pointer_move/drag/scroll (pass display, not target) within 60 seconds, with coordinates relative to this image; useful when a window refuses focus. New captures and other tool calls (except session_status and cursor_position) invalidate it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -75,7 +75,7 @@
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
-      "idempotentHint": true,
+      "idempotentHint": false,
       "openWorldHint": false
     }
   },
@@ -109,13 +109,27 @@
   },
   {
     "name": "windows_list",
-    "description": "Enumerate visible Win32 windows, optionally filter titles case-insensitively. Returns scoped target references; invalidates previous references.",
+    "description": "Enumerate visible Win32 windows. Optional filters: case-insensitive title substring, process executable name (e.g. notepad or notepad.exe), foreground only, titled only. Returns scoped target references with pid, process and class (null when unavailable); invalidates previous references.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "title": {
           "type": "string",
           "description": "Optional title substring"
+        },
+        "process": {
+          "type": "string",
+          "description": "Executable base name, case-insensitive; .exe optional"
+        },
+        "foreground": {
+          "type": "boolean",
+          "default": false,
+          "description": "Only the current foreground window"
+        },
+        "titled_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip windows with empty titles"
         }
       },
       "required": [],
@@ -183,7 +197,7 @@
   },
   {
     "name": "capture",
-    "description": "Activate target and return its visible region on the selected display (default primary). PNG metadata uses Windows desktop physical pixels. Not offscreen rendering. Returns capture_id for one click_at/scroll within 60 seconds; coordinates for those tools are relative to this image. New captures and other tool calls (except session_status) invalidate it.",
+    "description": "Activate target and return its visible region on the selected display (default primary). PNG metadata uses Windows desktop physical pixels. Not offscreen rendering. Returns capture_id for one click_at/pointer_move/drag/scroll (pass target) within 60 seconds; coordinates for those tools are relative to this image. New captures and other tool calls (except session_status and cursor_position) invalidate it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -318,17 +332,21 @@
   },
   {
     "name": "click_at",
-    "description": "Send one real left click using a single-use window capture proof. Checks target identity, foreground, bounds, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
+    "description": "Send a real click (left/right/middle, 1-3 clicks) at an observed image point using a single-use proof from capture (pass target) or display_capture (pass display). Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "target": {
           "type": "string",
-          "description": "Same target as the latest window capture."
+          "description": "Window target of the latest capture. Supply exactly one of target or display, matching how the proof was taken."
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference of the latest display_capture. Supply exactly one of target or display."
         },
         "capture_id": {
           "type": "string",
-          "description": "Unused capture_id returned by capture in this connection, valid for 60 seconds."
+          "description": "Unused capture_id returned by capture or display_capture in this connection, valid for 60 seconds."
         },
         "x": {
           "type": "integer",
@@ -339,10 +357,25 @@
           "type": "integer",
           "minimum": 0,
           "description": "Vertical pixel in the captured PNG, relative to its top edge."
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "default": "left"
+        },
+        "clicks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "default": 1,
+          "description": "2 = double click, 3 = triple click."
         }
       },
       "required": [
-        "target",
         "capture_id",
         "x",
         "y"
@@ -357,18 +390,136 @@
     }
   },
   {
-    "name": "scroll",
-    "description": "Send wheel input at the observed image point using a single-use window capture proof. Checks target identity, foreground, bounds, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
+    "name": "pointer_move",
+    "description": "Move the real cursor to an observed image point (e.g. to reveal hover menus or tooltips) using a single-use proof from capture (pass target) or display_capture (pass display). Sends no button or wheel input. Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "target": {
           "type": "string",
-          "description": "Same target as the latest window capture."
+          "description": "Window target of the latest capture. Supply exactly one of target or display, matching how the proof was taken."
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference of the latest display_capture. Supply exactly one of target or display."
         },
         "capture_id": {
           "type": "string",
-          "description": "Unused capture_id returned by capture in this connection, valid for 60 seconds."
+          "description": "Unused capture_id returned by capture or display_capture in this connection, valid for 60 seconds."
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Horizontal pixel in the captured PNG, relative to its left edge."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Vertical pixel in the captured PNG, relative to its top edge."
+        }
+      },
+      "required": [
+        "capture_id",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "drag",
+    "description": "Press a mouse button at one observed image point, move to a second point of the same image and release, using a single-use proof from capture (pass target) or display_capture (pass display). Both points must lie inside the captured image (and window). The button is released on every error path. Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Window target of the latest capture. Supply exactly one of target or display, matching how the proof was taken."
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference of the latest display_capture. Supply exactly one of target or display."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "Unused capture_id returned by capture or display_capture in this connection, valid for 60 seconds."
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start pixel, relative to the captured image left edge."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start pixel, relative to the captured image top edge."
+        },
+        "to_x": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End pixel, relative to the captured image left edge."
+        },
+        "to_y": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End pixel, relative to the captured image top edge."
+        },
+        "button": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ],
+          "default": "left"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000,
+          "default": 300,
+          "description": "Movement time while the button is held."
+        }
+      },
+      "required": [
+        "capture_id",
+        "x",
+        "y",
+        "to_x",
+        "to_y"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "scroll",
+    "description": "Send wheel input at an observed image point using a single-use proof from capture (pass target) or display_capture (pass display). Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Window target of the latest capture. Supply exactly one of target or display, matching how the proof was taken."
+        },
+        "display": {
+          "type": "string",
+          "description": "Display reference of the latest display_capture. Supply exactly one of target or display."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "Unused capture_id returned by capture or display_capture in this connection, valid for 60 seconds."
         },
         "x": {
           "type": "integer",
@@ -392,11 +543,114 @@
         }
       },
       "required": [
-        "target",
         "capture_id",
         "x",
         "y",
         "clicks"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cursor_position",
+    "description": "Read-only: return the current cursor position in Windows desktop physical pixels (origin at primary top-left). Does not consume or invalidate a capture proof.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "window_wait",
+    "description": "Poll every 100 ms until windows matching title and/or process are present, absent, or in the foreground, up to timeout. Cancellable. On success returns the matching windows as fresh targets (like windows_list) and invalidates previous targets; on timeout fails without changing targets.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Case-insensitive title substring"
+        },
+        "process": {
+          "type": "string",
+          "description": "Executable base name, case-insensitive; .exe optional"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "present",
+            "absent",
+            "foreground"
+          ]
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 5
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "app_launch",
+    "description": "Start a local program directly (no shell): absolute path to an existing .exe only (.cmd/.bat/.ps1/.lnk rejected), up to 32 literal arguments, optional absolute cwd. Disabled unless the MCP server was started with AUTOGUI_ALLOW_LAUNCH=1. Returns the pid without waiting for exit; with wait_title it also waits for a matching window and returns fresh targets.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute path to an existing .exe"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "description": "Literal arguments; no shell expansion"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Absolute existing working directory"
+        },
+        "wait_title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Wait for a window whose title contains this text"
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 30,
+          "default": 10,
+          "description": "Seconds to wait for wait_title"
+        }
+      },
+      "required": [
+        "path"
       ],
       "additionalProperties": false
     },
@@ -438,7 +692,7 @@
   },
   {
     "name": "hotkey",
-    "description": "Activate target and send a chord, releasing all keys afterwards (e.g. [ctrl,a] or [enter]). Verify the focused control before input.",
+    "description": "Validate key names, then activate target and send a chord, releasing all keys afterwards (e.g. [ctrl,a] or [enter]); presses repeats it, rechecking foreground and cancellation each time. Unknown keys fail before focus changes. Verify the focused control before input.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -455,6 +709,12 @@
           },
           "minItems": 1,
           "maxItems": 8
+        },
+        "presses": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 1
         }
       },
       "required": [

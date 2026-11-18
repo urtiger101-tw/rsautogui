@@ -58,7 +58,9 @@ pub unsafe extern "C" fn autogui_call_json(
         });
         let value = match value {
             Ok(v) => v,
-            Err(e) => json!({"content":[{"type":"text","text":e.to_string()}],"isError":true}),
+            Err(e) => {
+                json!({"content":[{"type":"text","text":app::mcp_tools::describe(&e)}],"isError":true})
+            }
         };
         let bytes = serde_json::to_vec(&value).map_err(std::io::Error::other)?;
         unsafe { reply(context, bytes.as_ptr(), bytes.len()) };

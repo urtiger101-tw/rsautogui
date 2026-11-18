@@ -2,7 +2,7 @@
 
 ## 安裝
 
-解壓縮整包，執行 `install.cmd`。安裝程式會分別詢問要安裝 **Skill** 與 **MCP** 的 Agent，可填 `codex,claude,opencode,agy` 的任意組合；兩者留空就是只安裝程式。預設位置為 `%LOCALAPPDATA%\Programs\AutoGui`，不需要管理員權限、不修改 PATH 或 Agent 的批准規則。安裝後重新啟動所選 Agent。
+解壓縮整包，執行 `install.cmd`，或執行 `AutoGui-<版本>-setup.exe`（見下方「Inno Setup 安裝程式」）。安裝程式會分別詢問要安裝 **Skill** 與 **MCP** 的 Agent，可填 `codex,claude,opencode,agy` 的任意組合；兩者留空就是只安裝程式。預設位置為 `%LOCALAPPDATA%\Programs\AutoGui`，不需要管理員權限、不修改 PATH 或 Agent 的批准規則。安裝後重新啟動所選 Agent。
 
 ```powershell
 # 先預覽
@@ -32,6 +32,37 @@ Codex 的 MCP 安裝需要本機 Codex CLI；其餘宿主只寫設定檔。JSONC
 
 解除安裝：執行安裝目錄內 `uninstall.ps1`。安裝器會備份要修改的 MCP 設定，並記錄安裝後雜湊。解除安裝只刪除未變更的自有檔案、還原未再變更的設定；使用者後來修改過的檔案會保留並明確提示。備份包含原設定，僅留在本機，不會放入發行包。完整解除安裝後，原始設定備份移至程式目錄旁的 `.recovery-<id>` 目錄，讓原位置可重新安裝。升級前先解除安裝；若仍有自行修改的內容，整理後再安裝。
 
+## Inno Setup 安裝程式
+
+`AutoGui-<版本>-setup.exe` 是每位使用者安裝程式（`PrivilegesRequired=lowest`，不需要系統管理員權限），預設安裝到 `%LOCALAPPDATA%\Programs\AutoGui`，不修改 PATH。它只把程式交給隨包的 `install.ps1`：程式檔 SHA-256 核對、安裝清單、Skill 與 MCP 設定與 `install.cmd` 完全相同。安裝程式不在程式目錄寫入任何檔案；解除安裝程式位於程式目錄旁的 `AutoGui.setup\unins000.exe`。
+
+互動安裝時，「Install Skill for」與「Register MCP server for」各有 Codex、Claude Code、OpenCode、AGY App／CLI 四個選項，預設都不勾選，即只安裝程式。
+
+靜默安裝時，任務名稱為 `skill\codex`、`skill\claude`、`skill\opencode`、`skill\agy`、`mcp\codex`、`mcp\claude`、`mcp\opencode`、`mcp\agy`，以逗號放在 `/TASKS` 中；省略 `/TASKS` 即只安裝程式。
+
+```powershell
+# 只安裝程式
+.\AutoGui-0.1.0-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+# 為 Claude Code 安裝 Skill 與 MCP，為 Codex 只安裝 Skill，並記錄安裝日誌
+.\AutoGui-0.1.0-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="skill\claude,mcp\claude,skill\codex" /LOG="$env:TEMP\autogui-setup.log"
+```
+
+升級：安裝前會先執行既有程式目錄內的 `uninstall.ps1`（靜默安裝也一樣），依清單移除未變更的檔案並還原 MCP 設定，再安裝新版。若仍有使用者修改過的檔案，該腳本會保留它們並中止安裝；關閉使用 `autogui-control.exe` 的 Agent 後重試，修改內容不會被覆蓋。
+
+解除安裝：使用「應用程式」中的 AutoGui，或執行 `%LOCALAPPDATA%\Programs\AutoGui.setup\unins000.exe /VERYSILENT`。只移除仍與安裝時雜湊相符的檔案、還原 MCP 設定；使用者修改過的檔案與 `AutoGui.recovery-*` 備份會保留並提示。
+
+Codex MCP 註冊需要 `codex` 在 PATH 上（`codex mcp add`）。`install.cmd` 與 zip 路徑仍可使用，行為相同。
+
+建置安裝程式（需要 Inno Setup 6）：
+
+```powershell
+.\scripts\package.ps1 -SkipBuild -Installer
+```
+
+版本取自根目錄 `Cargo.toml`；輸出 `dist\AutoGui-<版本>-setup.exe` 並顯示 SHA-256。ISCC.exe 依序尋找 `-IsccPath`、`$env:ISCC`、`%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe`、`%ProgramFiles%\Inno Setup 6\ISCC.exe`、`%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`，最後是 PATH 上的 `iscc`；找不到時在建置前失敗。
+
+隔離測試：`tests\inno-setup.ps1 -PackageRoot <payload>` 以測試用 AppId 編譯，只安裝到 `.agent\inno-test-*\program`，不選任何 Agent 任務，完成後解除安裝。
+
 ## DLL 載入
 
 `autogui-control.exe` 是小型啟動程式與 MCP 協定端點。`--help`、MCP `initialize`、`ping`、`tools/list` 不載入 `autogui_runtime.dll`。第一次 `tools/call` 才載入 DLL；CLI 的實際控制命令也會載入。DLL 在該程序存續期間共用，結束連線時釋放暫停租約，模組本身保持映射至程序結束，以保護 Rust TLS/背景清理。
@@ -43,13 +74,16 @@ Release 使用 opt-level=s、Thin LTO、單一 codegen unit、移除符號；辨
 ```powershell
 cargo build --release --workspace --all-features --locked
 .\scripts\package.ps1 -SkipBuild
+.\scripts\package.ps1 -SkipBuild -Installer
 ```
 
 ## MCP
 
 命令：`autogui-control.exe mcp`，stdio newline JSON-RPC，stdout 僅協定訊息、stderr 診斷，沒有 TCP 連接埠。支援 2024-11-05、2025-03-26、2025-06-18、2025-11-25 版本。先 initialize，再送 notifications/initialized。工具 schema 在 `mcp-tools.json`。
 
-提供 14 個工具：`session_status`、`displays_list`、`display_capture`、`window_to_display`、`windows_list`、`window_control`、`capture`、`locate`、`click_image`、`click_at`、`scroll`、`type_text`、`hotkey`、`screensaver`。清單回傳連線專用 target／display；重新列舉會使同類舊參照失效。擷取回傳 PNG image content，不要求宿主另讀本機檔案。輸入送出後仍須確認 App 的實際結果。指定顯示器與選配驅動見 [虛擬顯示器指南](virtual-display.md)。
+提供 19 個工具：`session_status`、`displays_list`、`display_capture`、`window_to_display`、`windows_list`、`window_control`、`window_wait`、`app_launch`、`capture`、`locate`、`click_image`、`click_at`、`pointer_move`、`drag`、`cursor_position`、`scroll`、`type_text`、`hotkey`、`screensaver`。清單回傳連線專用 target／display；重新列舉會使同類舊參照失效。擷取回傳 PNG image content，不要求宿主另讀本機檔案。輸入送出後仍須確認 App 的實際結果。指定顯示器與選配驅動見 [虛擬顯示器指南](virtual-display.md)。
+
+`pointer_move`、`drag` 與 `click_at` 共用截圖憑證（`capture` 或 `display_capture` 回傳的 `capture_id`）與截圖內座標。`click_at` 另可指定 `button`（`left`／`right`／`middle`）與 `clicks`（1–3）；`drag` 另有 `to_x`、`to_y`、`button` 與 `duration_ms`（0–5000，預設 300）。`display_capture` 的憑證可用於螢幕層級的指標操作，此時 `target` 與 `display` 須擇一。`cursor_position` 為唯讀。`window_wait` 等待 `present`、`absent` 或 `foreground`（timeout 最多 30 秒）。`windows_list` 可用 `process`、`foreground`、`titled_only` 篩選，回傳 `pid`、`process` 與 `class`。`hotkey` 會先驗證按鍵名稱，再啟用目標視窗，可用 `presses`（1–50）重複。`app_launch` 預設停用；MCP 程序需設定 `AUTOGUI_ALLOW_LAUNCH=1`，且只接受既存的絕對路徑 `.exe`。
 
 每行最大 1 MiB，超過會關閉連線；待處理佇列 16 筆，滿載時回傳 Server busy，保持連線。搜尋 timeout 最大 30 秒，文字最大 4096 個 Unicode scalar；每段最多 32 個字元，段前檢查取消、EOF 及前景，底層逐字 fail-safe 保留。單次原生呼叫/辨識不能中途撤回，段內失焦可能已有部分文字送出。序列處理桌面輸入，避免多工具互相搶焦點。暫停以專屬子程序持有租約，MCP 消失時管線 EOF 觸發還原；強制終止 helper 後，可由 durable journal 與 `screensaver resume` 恢復。
 

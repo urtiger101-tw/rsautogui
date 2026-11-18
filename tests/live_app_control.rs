@@ -21,6 +21,7 @@ use windows_sys::Win32::{
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, DPI_AWARENESS_CONTEXT_UNAWARE,
             GetThreadDpiAwarenessContext, SetThreadDpiAwarenessContext,
         },
+        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
         WindowsAndMessaging::*,
     },
 };
@@ -610,6 +611,65 @@ fn recognizes_and_controls_own_native_app() {
             client.tool("scroll", json!({"target":target,"capture_id":captured["capture_id"],"x":wheel_point.x-bounds.left,"y":wheel_point.y-bounds.top,"clicks":-3,"horizontal":horizontal}));
             wait_until(|| SCROLL_EVENTS.load(Ordering::SeqCst) > before);
         }
+        // Hover-only move and cursor readback; cursor_position keeps the proof.
+        let captured = client.tool("capture", json!({"target":target}));
+        let at = client.tool("cursor_position", json!({}));
+        assert!(at["x"].is_i64() && at["y"].is_i64(), "{at}");
+        client.tool("pointer_move", json!({"target":target,"capture_id":captured["capture_id"],"x":wheel_point.x-bounds.left,"y":wheel_point.y-bounds.top}));
+        let at = client.tool("cursor_position", json!({}));
+        assert_eq!(
+            (at["x"].as_i64(), at["y"].as_i64()),
+            (
+                Some(i64::from(wheel_point.x)),
+                Some(i64::from(wheel_point.y))
+            )
+        );
+        // Drag across an empty client area ends at the second point with the button released.
+        let captured = client.tool("capture", json!({"target":target}));
+        let drag_end = autogui::Point::new(wheel_point.x - 30, wheel_point.y - 10);
+        let dragged = client.tool("drag", json!({"target":target,"capture_id":captured["capture_id"],"x":wheel_point.x-bounds.left,"y":wheel_point.y-bounds.top,"to_x":drag_end.x-bounds.left,"to_y":drag_end.y-bounds.top,"duration_ms":100}));
+        assert_eq!(dragged["dragged"], true);
+        let at = client.tool("cursor_position", json!({}));
+        assert_eq!(
+            (at["x"].as_i64(), at["y"].as_i64()),
+            (Some(i64::from(drag_end.x)), Some(i64::from(drag_end.y)))
+        );
+        assert_eq!(
+            unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON)) } as u16 & 0x8000,
+            0,
+            "drag left the button pressed"
+        );
+        // Screen-level proof: display_capture then click_at with display, not target.
+        let displays = client.tool("displays_list", json!({}));
+        let primary = displays["displays"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["primary"] == true)
+            .unwrap()["display"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        gui.move_to_xy(button.x, button.y).unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        let region = json!({"left":bounds.left,"top":bounds.top,"width":bounds.width,"height":bounds.height});
+        let shot = client.tool(
+            "display_capture",
+            json!({"display":primary,"region":region}),
+        );
+        assert_eq!(
+            client.raw_tool("click_at", json!({"target":target,"capture_id":shot["capture_id"],"x":button.x-bounds.left,"y":button.y-bounds.top}))["isError"],
+            true,
+            "a display proof must not be usable with a window target"
+        );
+        let shot = client.tool(
+            "display_capture",
+            json!({"display":primary,"region":region}),
+        );
+        let before = fixture.clicks.load(Ordering::SeqCst);
+        client.tool("click_at", json!({"display":primary,"capture_id":shot["capture_id"],"x":button.x-bounds.left,"y":button.y-bounds.top}));
+        wait_until(|| fixture.clicks.load(Ordering::SeqCst) == before + 1);
+        window.activate().unwrap();
         let count = fixture.clicks.load(Ordering::SeqCst);
         let cancelled = client.cancelled_tool(
             "locate",
@@ -663,8 +723,32 @@ fn recognizes_and_controls_own_native_app() {
             dispatched,
             started.elapsed()
         );
+        // Discovery filters and waiting refresh targets with process metadata.
+        let listed = client.tool("windows_list", json!({"title":title,"titled_only":true}));
+        assert_eq!(listed["windows"][0]["pid"], std::process::id());
+        assert!(listed["windows"][0]["class"].is_string(), "{listed}");
+        let process = listed["windows"][0]["process"].as_str().unwrap().to_owned();
+        let by_process = client.tool("windows_list", json!({"process":process}));
+        assert!(!by_process["windows"].as_array().unwrap().is_empty());
+        let waited = client.tool(
+            "window_wait",
+            json!({"title":title,"state":"present","timeout":2}),
+        );
+        assert_eq!(waited["windows"].as_array().unwrap().len(), 1);
+        let target = waited["windows"][0]["target"].as_str().unwrap().to_owned();
+        let missing = client.raw_tool(
+            "window_wait",
+            json!({"title":"autogui never matching title 7f3a","state":"present","timeout":0.3}),
+        );
+        assert_eq!(missing["isError"], true);
+        assert!(
+            client.raw_tool("hotkey", json!({"target":target,"keys":["notakey"]}))["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("unknown key")
+        );
         println!(
-            "PASS MCP via lazy DLL: lifecycle, scoped/stale targets, Win32 move/resize/hide/show/minimize/maximize/restore, PNG, locate/click receipt, hotkey and Unicode text"
+            "PASS MCP via lazy DLL: lifecycle, scoped/stale targets, Win32 move/resize/hide/show/minimize/maximize/restore, PNG, locate/click receipt, pointer move/drag/display proof, window_wait, hotkey and Unicode text"
         );
         Some((client, target))
     } else {

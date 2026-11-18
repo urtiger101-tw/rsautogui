@@ -2,6 +2,8 @@
 use autogui::{AutoGui, Display, Error, LocateOptions, Point, Rect, Screenshot, Window};
 use std::time::{Duration, Instant};
 
+#[path = "support/desktop.rs"]
+pub(crate) mod desktop;
 #[path = "support/display_command.rs"]
 mod display_command;
 #[cfg(feature = "agent")]
@@ -29,6 +31,50 @@ fn number(value: Option<&String>, default: f64) -> autogui::Result<f64> {
         return Err(Error::InvalidArgument("numeric arguments must be finite"));
     }
     Ok(value)
+}
+
+/// Splits "--process <name>" and "--foreground" from positional arguments.
+fn parse_filter(args: &[String]) -> autogui::Result<(desktop::WindowFilter, Vec<String>)> {
+    let mut filter = desktop::WindowFilter::default();
+    let mut positional = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--process" => {
+                let name = iter
+                    .next()
+                    .ok_or(Error::InvalidArgument("--process needs an executable name"))?;
+                filter.process = Some(name.clone());
+            }
+            "--foreground" => filter.foreground = true,
+            _ => positional.push(arg.clone()),
+        }
+    }
+    Ok((filter, positional))
+}
+
+fn print_windows(windows: &[Window]) -> autogui::Result<()> {
+    for window in windows {
+        match (window.title(), window.box_rect()) {
+            (Ok(title), Ok(rect)) => {
+                let (pid, process) = desktop::process_info(window.hwnd())
+                    .map(|(pid, path)| (pid.to_string(), path))
+                    .unwrap_or_default();
+                println!(
+                    "{}\t{:?}\t{}\t{}\t{}\t{}",
+                    window.hwnd(),
+                    rect,
+                    title,
+                    pid,
+                    process,
+                    desktop::class_name(window.hwnd()).unwrap_or_default()
+                );
+            }
+            (Err(Error::WindowNotFound), _) | (_, Err(Error::WindowNotFound)) => {}
+            (Err(error), _) | (_, Err(error)) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn unique_window(gui: &mut AutoGui, title: &str) -> autogui::Result<Window> {
@@ -159,7 +205,7 @@ fn run() -> autogui::Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args[0] == "--help" {
         println!(
-            "用法：app_control list [標題]\n      app_control capture <標題> <output.png>\n      app_control locate <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control click <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control type <標題> <文字>\n\n標題使用不分大小寫的子字串；必須只符合一個視窗。\n預設 confidence=0.95、timeout=5、scale=1。\ncapture／locate／click／type 會啟用目標視窗；click／type 送出真實輸入。\n把游標移到主螢幕角落可中止。相似度模式需 --features opencv。 "
+            "用法：app_control list [標題] [--process 程式名] [--foreground]\n      app_control wait <標題> [present|absent|foreground] [timeout秒，預設10] [--process 程式名]\n      app_control capture <標題> <output.png>\n      app_control locate <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control click <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control type <標題> <文字>\n\n標題使用不分大小寫的子字串；必須只符合一個視窗（list／wait 例外）。list 輸出追加 pid、程式路徑、視窗類別；--process 比對執行檔名（不分大小寫，可省略 .exe）。wait 逾時以非零碼結束。\n預設 confidence=0.95、timeout=5、scale=1。\ncapture／locate／click／type 會啟用目標視窗；click／type 送出真實輸入。\n把游標移到主螢幕角落可中止。相似度模式需 --features opencv。 "
         );
         println!(
             "\n螢幕保護程式：\n      app_control screensaver status\n      app_control screensaver pause [秒數，預設 900，最多 86400]\n      app_control screensaver resume\n      app_control screensaver stop\n\npause 等待到期、Ctrl+C 或 resume 後還原原設定；不改動密碼或鎖定原則。\nstop 只關閉正在執行的螢幕保護程式，不會解除 Windows 鎖定。"
@@ -213,10 +259,20 @@ fn run() -> autogui::Result<()> {
         None
     };
     let command = args[0].as_str();
-    if !["list", "capture", "locate", "click", "type", "screensaver"].contains(&command) {
+    if ![
+        "list",
+        "wait",
+        "capture",
+        "locate",
+        "click",
+        "type",
+        "screensaver",
+    ]
+    .contains(&command)
+    {
         return Err(Error::InvalidArgument("unknown command; use --help"));
     }
-    if command != "list" && command != "screensaver" && args.len() < 3 {
+    if !matches!(command, "list" | "wait" | "screensaver") && args.len() < 3 {
         return Err(Error::InvalidArgument(
             "missing title or image/text argument; use --help",
         ));
@@ -233,19 +289,52 @@ fn run() -> autogui::Result<()> {
     }
     let mut gui = AutoGui::new()?;
     gui.settings_mut().pause = Duration::from_millis(25);
-    if command == "list" {
-        let windows = if let Some(title) = args.get(1) {
-            gui.get_windows_with_title_ci(title)?
-        } else {
-            gui.get_all_windows()?
-        };
-        for window in windows {
-            match (window.title(), window.box_rect()) {
-                (Ok(title), Ok(rect)) => println!("{}\t{:?}\t{}", window.hwnd(), rect, title),
-                (Err(Error::WindowNotFound), _) | (_, Err(Error::WindowNotFound)) => {}
-                (Err(error), _) | (_, Err(error)) => return Err(error),
+    if command == "list" || command == "wait" {
+        let (filter, positional) = parse_filter(&args[1..])?;
+        if command == "list" {
+            if positional.len() > 1 {
+                return Err(Error::InvalidArgument(
+                    "list [title] [--process name] [--foreground]",
+                ));
             }
+            let filter = desktop::WindowFilter {
+                title: positional.first().cloned(),
+                ..filter
+            };
+            print_windows(&desktop::list(&mut gui, &filter)?)?;
+            return Ok(());
         }
+        if positional.len() > 3 {
+            return Err(Error::InvalidArgument(
+                "wait <title> [present|absent|foreground] [timeout] [--process name]",
+            ));
+        }
+        let state = positional
+            .get(1)
+            .map(|s| desktop::WaitState::parse(s))
+            .transpose()?
+            .unwrap_or(desktop::WaitState::Present);
+        let seconds = number(positional.get(2), 10.0)?;
+        if !(0.0..=3600.0).contains(&seconds) {
+            return Err(Error::InvalidArgument(
+                "timeout must be between 0 and 3600 seconds",
+            ));
+        }
+        let filter = desktop::WindowFilter {
+            title: positional.first().cloned().filter(|t| !t.is_empty()),
+            ..filter
+        };
+        if filter.title.is_none() && filter.process.is_none() {
+            return Err(Error::InvalidArgument("wait needs a title or --process"));
+        }
+        let found = desktop::wait(
+            &mut gui,
+            &filter,
+            state,
+            Duration::from_secs_f64(seconds),
+            &|| Ok(()),
+        )?;
+        print_windows(&found)?;
         return Ok(());
     }
     let window = unique_window(&mut gui, &args[1])?;

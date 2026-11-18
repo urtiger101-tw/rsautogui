@@ -84,7 +84,20 @@ drop(held); // 反序釋放修飾鍵
 {"name":"click_at","arguments":{"target":"w1-0","capture_id":"c1","x":120,"y":80}}
 ```
 
-target／capture_id 必須取自當次連線的真實回應；`x/y` 是 PNG 左上角起算的相對座標，右、下邊界不包含在內。若需捲動，改用 `scroll` 並加 `clicks:-3`（往下）；`horizontal:true` 時正數往右。每次嘗試都消耗憑證，60 秒後過期；新截圖或其他工具（`session_status` 除外）會使舊憑證失效。`display_capture` 不產生輸入憑證。
+target／capture_id 必須取自當次連線的真實回應；`x/y` 是 PNG 左上角起算的相對座標，右、下邊界不包含在內。若需捲動，改用 `scroll` 並加 `clicks:-3`（往下）；`horizontal:true` 時正數往右。每次嘗試都消耗憑證，60 秒後過期；新截圖或其他工具（`session_status`、`cursor_position` 除外）會使舊憑證失效。`display_capture` 也回傳 `capture_id`，是不綁視窗的螢幕層級憑證，僅能搭配 `display`（不可用 `target`）呼叫；它驗證時效、顯示器、32×32 像素與游標，但不驗證前景或游標下的視窗，只應用於桌面、工作列等沒有單一目標視窗的情況。視窗憑證與螢幕憑證不可互用。
+
+### 其他指標與等待工具
+
+- `click_at` 可加 `button`（`left`／`right`／`middle`）與 `clicks`（1–3）。
+- `pointer_move {target|display,capture_id,x,y}`：只移動游標（hover、選單），檢查同 `click_at`。
+- `drag {target|display,capture_id,x,y,to_x,to_y,button?,duration_ms?}`：起點檢查後按下、移動、放開；`duration_ms` 0–5000，預設 300，任何錯誤路徑都會放開按鍵。
+- `cursor_position {}`：唯讀，不會使既有憑證失效。
+- `windows_list {title?,process?,foreground?,titled_only?}`：回傳另含 `pid`、`process`、`class`（查詢被拒時為 null）。
+- `window_wait {title?,process?,state,timeout?}`：每 100 ms 輪詢 `present`／`absent`／`foreground`（`state` 必填），timeout 0–30 秒（預設 5），逾時為錯誤；會像 `windows_list` 一樣更新 target。
+- `hotkey` 可加 `presses`（1–50）；未知按鍵名稱會在啟用視窗前就被拒絕。
+- `app_launch {path,args?,cwd?,wait_title?,timeout?}`：只接受本機磁碟機絕對路徑的 `.exe`（不接受 UNC／裝置路徑；不經 shell；拒絕 `.cmd`／`.bat`／`.ps1`／`.lnk`，最多 32 個參數），**預設停用**，須在 MCP 伺服器環境設定 `AUTOGUI_ALLOW_LAUNCH=1`，否則回傳 `PermissionDenied`。回傳 pid；指定 `wait_title` 時會等待視窗並回傳 target。
+
+CLI 對應：`app_control list [標題] [--process 名稱] [--foreground]`、`app_control wait <標題> [present|absent|foreground] [秒] [--process 名稱]`。錯誤訊息附帶復原建議。
 
 送出事件前檢查原 target 身分、前景、視窗／顯示器幾何、游標、取消訊號及座標周圍最多 32×32 像素，移鼠後再檢查。hover／動畫導致像素變動時會拒絕；游標可能已移到目的地，重新擷取後再判斷。此局部比對無法偵測範圍外的語意變化，也無法消除最後檢查至系統輸入間的狀態變動；每次操作後仍須截圖確認。
 
