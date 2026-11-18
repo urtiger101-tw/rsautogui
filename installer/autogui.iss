@@ -96,20 +96,56 @@ begin
   AddHost(Result, Group, 'agy');
 end;
 
+// A previous uninstall.ps1 keeps files whose hashes changed after install
+// (for example locally replaced program files) together with the manifest,
+// and removes itself. Such a directory blocks install.ps1. With consent
+// (or /PRESERVELEFTOVERS=1 in silent mode) the whole directory is renamed to
+// a sibling {app}.preserved-<timestamp>; nothing is deleted.
+function PreserveLeftovers(): String;
+var
+  App, Target: String;
+begin
+  Result := '';
+  App := ExpandConstant('{app}');
+  Target := App + '.preserved-' + GetDateTimeString('yyyymmdd-hhnnss', #0, #0);
+  if (ExpandConstant('{param:PRESERVELEFTOVERS|0}') <> '1') and
+     (SuppressibleMsgBox('A previous AutoGui installation left files that were modified after it was installed ' +
+       '(for example replaced program files). They were kept and block a clean install.' + #13#10#13#10 +
+       'Move the folder' + #13#10 + App + #13#10 + 'to' + #13#10 + Target + #13#10 +
+       'and continue? Nothing is deleted.', mbConfirmation, MB_YESNO, IDNO) <> IDYES) then
+  begin
+    Result := 'Setup stopped. The kept files are still in ' + App + '. Move or remove that folder, then run Setup again.';
+    Exit;
+  end;
+  if RenameFile(App, Target) then
+    Log('Moved leftover installation to ' + Target)
+  else
+    Result := 'Could not move ' + App + ' to ' + Target + '. ' +
+      'Close agents and MCP hosts that use autogui-control.exe, then run Setup again.';
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
+  Uninstaller: String;
 begin
   Result := '';
   // Upgrade path: an existing manifest is removed by its own uninstall.ps1
-  // first. Modified files are preserved by that script; if any manifest
-  // remains, stop before touching the program directory.
+  // first. If files remain (modified files, or uninstall.ps1 already gone
+  // after an earlier partial uninstall), offer to move them aside.
   if FileExists(ManifestPath()) then
   begin
-    if (not RunPackageScript(ExpandConstant('{app}\uninstall.ps1'), '-InstallDir "' + ExpandConstant('{app}') + '"', ResultCode))
-       or (ResultCode <> 0) or FileExists(ManifestPath()) then
-      Result := 'The existing AutoGui installation could not be removed completely. ' +
-        'Close agents that use autogui-control.exe, then retry. Modified files were preserved.';
+    Uninstaller := ExpandConstant('{app}\uninstall.ps1');
+    if FileExists(Uninstaller) then
+    begin
+      if (not RunPackageScript(Uninstaller, '-InstallDir "' + ExpandConstant('{app}') + '"', ResultCode))
+         or (ResultCode <> 0) then
+        Log('Previous uninstall.ps1 did not complete; exit code ' + IntToStr(ResultCode));
+    end
+    else
+      Log('Previous uninstall.ps1 is missing; an earlier uninstall was partial.');
+    if FileExists(ManifestPath()) then
+      Result := PreserveLeftovers();
   end;
 end;
 

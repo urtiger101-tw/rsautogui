@@ -67,6 +67,29 @@ Assert (-not (Test-Path -LiteralPath $registryKey)) 'Uninstall left the registra
 $recovery=@(Get-ChildItem -LiteralPath $fixture -Directory -Filter 'program.recovery-*')
 Assert ($recovery.Count -ge 1) 'Recovery backups were not retained'
 
+# Partial-uninstall leftovers: a modified program file keeps the manifest and
+# uninstall.ps1 removes itself. Silent Setup refuses by default and, with
+# /PRESERVELEFTOVERS=1, moves the directory aside and installs cleanly.
+$leftover=Join-Path $fixture 'program-leftover'
+$code=Run-Setup $setup @("/DIR=""$leftover""","/LOG=""$(Join-Path $fixture 'install-leftover-1.log')""")
+Assert ($code -eq 0) "Leftover fixture install exited $code"
+Add-Content -LiteralPath (Join-Path $leftover 'autogui-control.exe') -Value 'modified' -Encoding ASCII
+& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $leftover 'uninstall.ps1') -InstallDir $leftover | Out-Null
+Assert (Test-Path -LiteralPath (Join-Path $leftover '.install\manifest.json')) 'Fixture did not reproduce a partial uninstall'
+Assert (-not (Test-Path -LiteralPath (Join-Path $leftover 'uninstall.ps1'))) 'Fixture uninstall.ps1 unexpectedly remained'
+$code=Run-Setup $setup @("/DIR=""$leftover""","/LOG=""$(Join-Path $fixture 'install-leftover-2.log')""")
+Assert ($code -ne 0) 'Leftover install without consent unexpectedly succeeded'
+Assert (Test-Path -LiteralPath (Join-Path $leftover '.install\manifest.json')) 'Refused install changed leftovers'
+$code=Run-Setup $setup @("/DIR=""$leftover""","/PRESERVELEFTOVERS=1","/LOG=""$(Join-Path $fixture 'install-leftover-3.log')""")
+Assert ($code -eq 0) "Leftover install with /PRESERVELEFTOVERS=1 exited $code; see install-leftover-3.log"
+$preserved=@(Get-ChildItem -LiteralPath $fixture -Directory -Filter 'program-leftover.preserved-*')
+Assert ($preserved.Count -eq 1) 'Leftovers were not moved to a .preserved sibling'
+Assert ((Get-Content -LiteralPath (Join-Path $preserved[0].FullName 'autogui-control.exe') -Raw) -match 'modified') 'Preserved file changed'
+& (Join-Path $leftover 'autogui-control.exe') --help | Out-Null
+Assert ($LASTEXITCODE -eq 0) 'Reinstalled launcher --help failed'
+$code=Run-Setup "$leftover.setup\unins000.exe" @()
+Assert ($code -eq 0) "Leftover fixture uninstall exited $code"
+
 # Failure path: a pre-existing file makes install.ps1 refuse; Setup must exit non-zero
 # and leave that file untouched.
 $collision=Join-Path $fixture 'program-collision'
@@ -76,4 +99,4 @@ $code=Run-Setup $setup @("/DIR=""$collision""","/LOG=""$(Join-Path $fixture 'ins
 Assert ($code -ne 0) 'Collision install unexpectedly succeeded'
 Assert (-not (Test-Path -LiteralPath (Join-Path $collision 'autogui-control.exe'))) 'Collision left program files'
 Assert ((Get-Content -LiteralPath (Join-Path $collision 'user-file.txt') -Raw).Trim() -eq 'keep') 'Collision changed user file'
-Write-Host "PASS inno-setup: test AppId $appId, fresh install, upgrade, uninstall, collision exit $code; isolated fixture $fixture"
+Write-Host "PASS inno-setup: test AppId $appId, fresh install, upgrade, uninstall, partial-uninstall leftovers, collision exit $code; isolated fixture $fixture"
