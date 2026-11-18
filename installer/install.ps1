@@ -86,7 +86,13 @@ foreach ($name in $McpHosts) {
     $path = Full $configs[$name]
     $before = if (Test-Path -LiteralPath $path) { [IO.File]::ReadAllText($path) } else { '{}' }
     if ($name -eq 'codex') {
-        $codexCommand = Get-Command codex -ErrorAction Stop
+        $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+        if (-not $codexCommand) {
+            # Setup launched from Explorer inherits its possibly stale PATH; reread the persisted machine and user PATH.
+            $env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), $env:Path) | Where-Object { $_ }) -join ';'
+            $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+        }
+        if (-not $codexCommand) { throw 'Codex MCP registration needs the codex CLI on PATH. Install Codex or deselect the Codex MCP option.' }
         $previous = $env:CODEX_HOME
         try {
             $env:CODEX_HOME = Full $CodexHome
