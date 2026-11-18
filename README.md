@@ -10,7 +10,7 @@ The `autogui` library is independently implemented in Rust and modeled on PyAuto
 
 完整功能保留在 `autogui_runtime.dll`，搭配小型 `autogui-control.exe`。Help、MCP 初始化及工具列舉不載入 DLL；第一次執行控制工具時才載入。原本所有 `image` 預設格式仍保留。Release 同時使用大小最佳化、Thin LTO 與符號移除，辨識核心及 FFT 維持效能最佳化，並保留 unwind 清理。
 
-發行包解壓縮後執行 `install.cmd`，可分別選擇安裝 **Skill** 與 **MCP** 給 Codex、Claude、OpenCode、AGY，也能只安裝程式或自訂 Skill 目錄。安裝器備份既有設定；解除安裝保護後續修改。不要將 EXE 與 DLL 分開移動。
+發行包解壓縮後執行 `install.cmd`，或執行 `AutoGui-<版本>-setup.exe`（Inno Setup 每位使用者安裝程式，見下節），可分別選擇安裝 **Skill** 與 **MCP** 給 Codex、Claude、OpenCode、AGY，也能只安裝程式或自訂 Skill 目錄。安裝器備份既有設定；解除安裝保護後續修改。不要將 EXE 與 DLL 分開移動。
 
 ```powershell
 git clone https://github.com/urtiger101-tw/rsautogui.git
@@ -19,9 +19,14 @@ cargo build --release --workspace --all-features --locked
 .\target\release\autogui-control.exe --help
 .\target\release\autogui-control.exe mcp
 .\scripts\package.ps1 -SkipBuild
+.\scripts\package.ps1 -SkipBuild -Installer
 ```
 
-MCP 提供 14 個工具，涵蓋無人值守就緒檢查、顯示器／視窗列舉、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、捲動、文字、快捷鍵與螢幕保護程式。`capture` 回傳一次性 `capture_id`，可直接使用截圖內座標呼叫 `click_at`／`scroll`，省去外部裁圖。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
+MCP 提供 19 個工具，涵蓋無人值守就緒檢查、顯示器／視窗列舉與等待、指定顯示器截圖、移動 App、Win32 控制、找圖、點擊、拖曳、游標位置、捲動、文字、快捷鍵與螢幕保護程式。`capture` 與 `display_capture` 回傳一次性 `capture_id`，可直接使用截圖內座標呼叫 `click_at`／`pointer_move`／`drag`／`scroll`，省去外部裁圖。`app_launch` 預設停用，需設定 `AUTOGUI_ALLOW_LAUNCH=1` 才會啟動程式。Agent 適用操作 Skill 隨包提供；詳見 [安裝、DLL 與 MCP 指南](docs/agent-installation.md)。
+
+### Inno Setup 安裝程式
+
+`AutoGui-<版本>-setup.exe` 安裝到 `%LOCALAPPDATA%\Programs\AutoGui`，只需目前使用者權限，不修改 PATH。實際安裝仍由隨包的 `install.ps1` 執行（核對 SHA-256、寫入清單、選擇 Skill／MCP）；安裝程式不會在程式目錄寫入任何檔案。靜默安裝與升級、解除安裝的細節見 [安裝指南](docs/agent-installation.md)。
 
 ## 虛擬顯示器
 

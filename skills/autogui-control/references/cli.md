@@ -5,6 +5,9 @@ Read the `executable` property from `../runtime.json` (created by the installer)
 ```powershell
 & $exe session status --json
 & $exe list 'Editor'
+& $exe list --process notepad --foreground
+& $exe wait 'Untitled' present 10
+& $exe wait --process notepad absent 5
 & $exe display list
 # Replace the device name with one returned by display list.
 & $exe display capture '\\.\DISPLAY2' "$env:TEMP\virtual.png"
@@ -21,6 +24,8 @@ Read the `executable` property from `../runtime.json` (created by the installer)
 & $exe screensaver pause 900
 & $exe screensaver resume
 ```
+
+`list` prints `hwnd`, rectangle, title, pid, full process path and window class (tab-separated; pid/path/class are empty when Windows denies the lookup). `--process` matches the executable base name case-insensitively (`.exe` optional); `--foreground` keeps only the active window. `wait <title> [present|absent|foreground] [timeout seconds, default 10]` polls every 100 ms, prints the matches and exits 1 on timeout; the title may be `''` when `--process` is given. There is no CLI launch command: `app_launch` exists only over MCP and requires `AUTOGUI_ALLOW_LAUNCH=1` in the MCP server environment.
 
 CLI title selectors are case-insensitive substrings and must match exactly one visible window. CLI `pause` blocks until timer, Ctrl+C or another `resume`. MCP `pause` is asynchronous and connection-owned. `hide` can only be reversed through the retained MCP reference or another mechanism because CLI lists visible windows.
 

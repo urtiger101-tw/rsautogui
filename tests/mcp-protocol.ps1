@@ -13,6 +13,8 @@ function StartMcp([string]$Path) {
     $start.RedirectStandardInput=$true
     $start.RedirectStandardOutput=$true
     $start.RedirectStandardError=$true
+    # app_launch must stay disabled by default regardless of the caller's environment.
+    [void]$start.EnvironmentVariables.Remove('AUTOGUI_ALLOW_LAUNCH')
     $start.StandardOutputEncoding=[Text.Encoding]::UTF8
     $start.StandardErrorEncoding=[Text.Encoding]::UTF8
     $process=New-Object Diagnostics.Process
@@ -58,7 +60,7 @@ try {
     Assert ($before.error.code -eq -32002) 'Pre-initialize request should fail'
     Initialize $client
     $list=Request $client 'tools/list' @{}
-    Assert ($list.result.tools.Count -eq 14) 'Wrong tool count'
+    Assert ($list.result.tools.Count -eq 19) 'Wrong tool count'
     Assert (-not (Loaded $client)) 'DLL loaded just to initialize/list tools'
     $client.Process.StandardInput.WriteLine('{')
     $client.Process.StandardInput.Flush()
@@ -69,12 +71,17 @@ try {
     $invalid=Tool $client type_text @{target='never-existed';text='unused';extra=$true}
     Assert $invalid.isError 'Unknown fields accepted'
     Assert (Loaded $client) 'First tool call did not load runtime DLL'
-    foreach ($name in @('click_at','scroll')) {
+    foreach ($name in @('click_at','scroll','pointer_move','drag')) {
         $arguments=@{target='never-existed';capture_id='never-existed';x=1;y=1}
         if($name -eq 'scroll'){$arguments.clicks=-3}
+        if($name -eq 'drag'){$arguments.to_x=2;$arguments.to_y=2}
         $withoutCapture=Tool $client $name $arguments
         Assert ($withoutCapture.isError -and $withoutCapture.content[0].text -match 'capture') 'Pointer input accepted without a capture proof'
     }
+    $launch=Tool $client app_launch @{path='C:\Windows\System32\notepad.exe'}
+    Assert ($launch.isError -and $launch.content[0].text -match 'AUTOGUI_ALLOW_LAUNCH' -and $launch.content[0].text -match 'Hint:') 'app_launch not disabled by default or missing recovery hint'
+    $badKey=Tool $client hotkey @{target='never-existed';keys=@('notakey')}
+    Assert ($badKey.isError -and $badKey.content[0].text -match 'unknown key') 'Unknown hotkey name not rejected before focus'
     $status=Tool $client screensaver @{action='status'}
     Assert (-not $status.isError) 'Screensaver status failed through DLL'
     if($LiveScreensaver) {
@@ -102,7 +109,7 @@ Copy-Item -LiteralPath $Executable -Destination $separated
 $client=StartMcp $separated
 try {
     Initialize $client
-    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 14) 'Tool listing requires DLL'
+    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 19) 'Tool listing requires DLL'
     $missing=Tool $client screensaver @{action='status'}
     Assert ($missing.isError -and $missing.content[0].text -match 'autogui_runtime.dll') 'Missing DLL failure unclear'
 } finally {StopMcp $client}
