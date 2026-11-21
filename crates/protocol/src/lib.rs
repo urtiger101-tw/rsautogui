@@ -6,6 +6,6 @@ pub mod export;
 pub mod server;
 pub mod tools;
 
-pub use errors::{ErrorCode, ToolError};
-pub use server::{Handler, run};
-pub use tools::{NAMES, definitions};
+pub use errors::{Cancellation, ErrorCode, ToolError, cancellation, is_cancellation};
+pub use server::{Handler, PROTOCOL_VERSION, run};
+pub use tools::{NAMES, definitions, read_only};

@@ -39,6 +39,17 @@ pub fn definitions() -> &'static Value {
     })
 }
 
+/// Whether `name` is annotated `readOnlyHint: true` in the catalogue: it
+/// sends no input and changes no window or system state. Unknown names are
+/// not read-only.
+pub fn read_only(name: &str) -> bool {
+    definitions().as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|t| t["name"] == name && t["annotations"]["readOnlyHint"] == true)
+    })
+}
+
 /// The serialized `tools/list` result object (`{"tools":[...]}`), built once.
 pub fn list_result_json() -> &'static str {
     static LIST: OnceLock<String> = OnceLock::new();
@@ -72,6 +83,33 @@ mod tests {
             // Error results reuse structuredContent, so nothing may be required.
             assert!(output.get("required").is_none(), "{tool}");
             assert!(tool["annotations"]["readOnlyHint"].is_boolean(), "{tool}");
+        }
+    }
+
+    #[test]
+    fn read_only_follows_annotations() {
+        for name in [
+            "session_status",
+            "displays_list",
+            "display_capture",
+            "windows_list",
+            "cursor_position",
+            "window_wait",
+        ] {
+            assert!(read_only(name), "{name}");
+        }
+        for name in [
+            "type_text",
+            "hotkey",
+            "click_at",
+            "drag",
+            "capture",
+            "window_control",
+            "screensaver",
+            "app_launch",
+            "nope",
+        ] {
+            assert!(!read_only(name), "{name}");
         }
     }
 
