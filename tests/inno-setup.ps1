@@ -42,6 +42,8 @@ $registryKey="HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{$appId}
 # Fresh install: no tasks, so install.ps1 receives no host lists.
 $code=Run-Setup $setup @("/DIR=""$program""","/LOG=""$(Join-Path $fixture 'install-1.log')""")
 Assert ($code -eq 0) "Install exited $code; see install-1.log"
+# RedirectionGuard=no: install.ps1 must be able to follow user junctions (the Codex CLI path is one).
+Assert (-not (Select-String -LiteralPath (Join-Path $fixture 'install-1.log') -Pattern 'RedirectionGuard status for current process: Enabled' -Quiet)) 'Setup enabled RedirectionGuard'
 Assert (Test-Path -LiteralPath (Join-Path $program 'autogui-control.exe')) 'Launcher not installed'
 Assert (Test-Path -LiteralPath (Join-Path $program 'autogui_runtime.dll')) 'Runtime DLL not installed'
 Assert (Test-Path -LiteralPath (Join-Path $program '.install\manifest.json')) 'Manifest not written by install.ps1'
