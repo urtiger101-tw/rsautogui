@@ -76,7 +76,7 @@ $exe = "$env:LOCALAPPDATA\Programs\AutoGui\autogui-control.exe"
 & $exe mcp config --host claude-desktop
 ```
 
-`mcp config --host` 只輸出設定片段，不寫入任何檔案，支援 `claude-code`、`claude-desktop`、`codex`、`openai-agents`、`opencode` 與 `agy`。`mcp tools --format` 匯出工具定義，格式為 `mcp`（預設）、`anthropic`、`openai` 或 `openai-chat`。結束碼與全域旗標見 [README](../README.md)。
+`mcp config --host` 只把設定片段輸出到 stdout（說明寫到 stderr），不寫入任何檔案，支援 `claude-code`、`claude-desktop`、`codex`、`openai-agents`、`opencode` 與 `agy`。`mcp tools --format` 匯出工具定義，格式為 `mcp`（預設）、`anthropic`、`openai` 或 `openai-chat`。結束碼與全域旗標見 [README](../README.md)。
 
 ## DLL 載入
 
@@ -118,3 +118,7 @@ cargo build --release --workspace --all-features --locked
 - [AGY CLI 設定遷移及路徑](https://antigravity.google/docs/cli/gcli-migration/)
 - [Antigravity Skills（App／CLI 共享與 CLI 舊路徑）](https://antigravity.google/docs/skills/) 與 [Customization discovery](https://antigravity.google/docs/customization-discovery/)
 - Codex 註冊參數以本機 `codex mcp add --help` 為準。
+
+### MCP 連線關閉時
+
+MCP 用戶端關閉 stdin 後，已排入佇列的請求仍會回覆：唯讀工具照常執行，其他會送出輸入或變更狀態的工具一律回傳 `cancelled`。因此可以把整段 JSON-RPC 以管線送入 `autogui-control mcp` 做唯讀檢查。stdin 開頭的 UTF-8 BOM（Windows PowerShell 5.1 會加上）會被忽略。

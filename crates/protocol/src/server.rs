@@ -302,6 +302,12 @@ impl<T: Handler> Server<T> {
     }
 }
 
+/// Some Windows hosts (e.g. Windows PowerShell 5.1 redirecting stdin) prefix the
+/// stream with a UTF-8 byte-order mark; JSON-RPC itself never contains one.
+fn strip_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
+}
+
 fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
     let mut bytes = Vec::new();
     loop {
@@ -396,7 +402,7 @@ pub fn run(handler: impl Handler) -> Result<()> {
                     break;
                 }
             };
-            let message = match serde_json::from_slice::<Value>(&bytes) {
+            let message = match serde_json::from_slice::<Value>(strip_bom(&bytes)) {
                 Ok(message) => message,
                 Err(_) => {
                     if write_response(&reader_output, error(Value::Null, -32700, "Parse error"))
@@ -759,6 +765,13 @@ mod tests {
         let reply = only(handle(&mut s, &interrupts, queued(2, "type_text")));
         assert_eq!(reply["result"]["isError"], false, "{reply}");
         assert_eq!(s.tools.ran, ["type_text"]);
+    }
+    #[test]
+    fn utf8_bom_is_ignored() {
+        let message = b"\xEF\xBB\xBF{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n";
+        let value: Value = serde_json::from_slice(strip_bom(message)).unwrap();
+        assert_eq!(value["method"], "ping");
+        assert_eq!(strip_bom(b"{}"), b"{}");
     }
     #[test]
     fn bounded_lines() {

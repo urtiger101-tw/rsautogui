@@ -12,8 +12,7 @@ mod mcp_cmd;
 mod windows;
 
 /// MCP protocol version this build speaks.
-// TODO: use autogui_protocol::PROTOCOL_VERSION once the protocol crate exports it.
-pub const PROTOCOL: &str = "2025-11-25";
+pub const PROTOCOL: &str = autogui_protocol::PROTOCOL_VERSION;
 /// C ABI version of autogui_runtime.dll this launcher accepts.
 pub const EXPECTED_ABI: u32 = 1;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

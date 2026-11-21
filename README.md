@@ -85,14 +85,16 @@ CLI 的結束碼可用於腳本判斷，失敗時 stderr 會說明原因（搭�
 
 | 旗標 | 說明 |
 |---|---|
-| `--json` | 機器可讀輸出（`doctor`、`session status`、`-V`）；錯誤以 JSON 寫到 stderr。`mcp tools` 的輸出本來就是 JSON |
+| `--json` | 機器可讀輸出（`doctor`、`session status`、`list`、`wait`、`capture`、`type`、`locate`、`click`、`mcp config`、`-V`）；錯誤以 JSON 寫到 stderr。`mcp tools` 的輸出本來就是 JSON |
 | `--quiet` | 不顯示成功訊息 |
 | `--no-color` | 只用 ASCII 符號、不著色；也可設定 `NO_COLOR` |
 | `--lang en\|zh` | 說明與訊息語言；依序為 `--lang`、`AUTOGUI_LANG`、Windows 介面語言，最後是英文 |
 | `-V`, `--version` | 版本；加 `--json` 顯示詳細資訊 |
 | `-h`, `--help`, `help <命令>` | 說明；`<命令> --help` 同樣可用 |
 
-`--` 之後的參數一律當作文字，例如要輸入字面上的 `--json`：`autogui-control type Notepad -- --json`。`--doctor` 是 `doctor` 的別名。
+全域旗標放在命令之前一律有效；放在命令之後也有效，但 `type` 例外：`type` 的文字原樣輸入，因此 `autogui-control type Notepad --json` 會輸入字面上的 `--json`。`--` 之後的參數一律當作文字。`--doctor` 是 `doctor` 的別名。
+
+`mcp config` 只把設定片段輸出到 stdout（可直接存成 JSON／TOML），要修改的檔案與 `claude mcp add` 指令等說明寫到 stderr；加 `--json` 則輸出 `{host, file, snippet, command}`。
 
 ## Windows Agent 套件：按需載入 DLL、MCP、Skills
 
