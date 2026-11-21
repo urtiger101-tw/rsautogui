@@ -4,6 +4,25 @@ use std::time::{Duration, Instant};
 
 use crate::commands::{display as display_command, screensaver, session, window as window_command};
 use crate::desktop;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+mod args;
+mod errors;
+
+/// Exit code for panics and other internal errors.
+pub use errors::INTERNAL as EXIT_INTERNAL;
+
+static QUIET: AtomicBool = AtomicBool::new(false);
+static JSON: AtomicBool = AtomicBool::new(false);
+
+/// True when --quiet asked to suppress success messages.
+pub(crate) fn quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
+fn json_output() -> bool {
+    JSON.load(Ordering::Relaxed)
+}
 
 fn number(value: Option<&String>, default: f64) -> autogui::Result<f64> {
     let value = value
@@ -40,25 +59,41 @@ fn parse_filter(args: &[String]) -> autogui::Result<(desktop::WindowFilter, Vec<
 }
 
 fn print_windows(windows: &[Window]) -> autogui::Result<()> {
+    let mut rows = Vec::new();
     for window in windows {
         match (window.title(), window.box_rect()) {
             (Ok(title), Ok(rect)) => {
                 let (pid, process) = desktop::process_info(window.hwnd())
                     .map(|(pid, path)| (pid.to_string(), path))
                     .unwrap_or_default();
-                println!(
-                    "{}\t{:?}\t{}\t{}\t{}\t{}",
-                    window.hwnd(),
-                    rect,
-                    title,
-                    pid,
-                    process,
-                    desktop::class_name(window.hwnd()).unwrap_or_default()
-                );
+                let class = desktop::class_name(window.hwnd()).unwrap_or_default();
+                if json_output() {
+                    rows.push(serde_json::json!({
+                        "hwnd": window.hwnd(),
+                        "rect": {"left": rect.left, "top": rect.top, "width": rect.width, "height": rect.height},
+                        "title": title,
+                        "pid": pid.parse::<u32>().ok(),
+                        "process": process,
+                        "class": class,
+                    }));
+                } else {
+                    println!(
+                        "{}\t{:?}\t{}\t{}\t{}\t{}",
+                        window.hwnd(),
+                        rect,
+                        title,
+                        pid,
+                        process,
+                        class
+                    );
+                }
             }
             (Err(Error::WindowNotFound), _) | (_, Err(Error::WindowNotFound)) => {}
             (Err(error), _) | (_, Err(error)) => return Err(error),
         }
+    }
+    if json_output() {
+        println!("{}", serde_json::Value::Array(rows));
     }
     Ok(())
 }
@@ -187,26 +222,13 @@ pub(crate) fn locate_target(
     }
 }
 
-fn run() -> autogui::Result<()> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() || args[0] == "--help" {
-        println!(
-            "用法：app_control list [標題] [--process 程式名] [--foreground]\n      app_control wait <標題> [present|absent|foreground] [timeout秒，預設10] [--process 程式名]\n      app_control capture <標題> <output.png>\n      app_control locate <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control click <標題> <template.png> [confidence|exact] [timeout秒] [scale]\n      app_control type <標題> <文字>\n\n標題使用不分大小寫的子字串；必須只符合一個視窗（list／wait 例外）。list 輸出追加 pid、程式路徑、視窗類別；--process 比對執行檔名（不分大小寫，可省略 .exe）。wait 逾時以非零碼結束。\n預設 confidence=0.95、timeout=5、scale=1。\ncapture／locate／click／type 會啟用目標視窗；click／type 送出真實輸入。\n把游標移到主螢幕角落可中止。相似度模式需 --features opencv。 "
-        );
-        println!(
-            "\n螢幕保護程式：\n      app_control screensaver status\n      app_control screensaver pause [秒數，預設 900，最多 86400]\n      app_control screensaver resume\n      app_control screensaver stop\n\npause 等待到期、Ctrl+C 或 resume 後還原原設定；不改動密碼或鎖定原則。\nstop 只關閉正在執行的螢幕保護程式，不會解除 Windows 鎖定。"
-        );
-        println!(
-            "\nWin32 控制：app_control window <inspect|activate|minimize|maximize|restore|hide|show|move|resize|close> <標題> [x y|width height]\nAgent：autogui-control mcp（stdio MCP server；需 agent feature）"
-        );
-        println!(
-            "\n顯示器：app_control display list\n        app_control display capture <裝置名稱> <output.png>\n        app_control display move <裝置名稱> <唯一視窗標題>\ncapture／locate／click 可在最後附加 --display <裝置名稱>。顯示器座標為 Windows 桌面實體像素，可為負數。虛擬顯示器需另外安裝 IDD 驅動；所有螢幕共用焦點與滑鼠。"
-        );
-        println!(
-            "
-無人值守／無螢幕檢查：app_control session status [--json]
-回報工作階段、鎖定、遠端桌面、顯示器與截圖探測；有阻擋項時以非零碼結束。詳見 docs/headless.md。"
-        );
+fn run(mut args: Vec<String>) -> autogui::Result<()> {
+    if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
+        println!("Help is provided by the launcher: run 'autogui-control --help'.");
+        return Ok(());
+    }
+    if args[0] == "__runtime-version" {
+        println!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     #[cfg(feature = "agent")]
@@ -222,7 +244,14 @@ fn run() -> autogui::Result<()> {
     }
     // Diagnostics must work even when the input backend cannot start.
     if args[0] == "session" {
-        return session::run(&args[1..]);
+        let mut rest = args[1..].to_vec();
+        if json_output() && !rest.iter().any(|a| a == "--json") {
+            if rest.is_empty() {
+                rest.push("status".into());
+            }
+            rest.push("--json".into());
+        }
+        return session::run(&rest);
     }
     let display = if matches!(args[0].as_str(), "capture" | "locate" | "click") {
         if let Some(index) = args
@@ -359,14 +388,19 @@ fn run() -> autogui::Result<()> {
         "capture" => {
             let region = screen_region(&gui, &window, display.as_ref())?;
             capture_region(&mut gui, display.as_ref(), region)?.save(&args[2])?;
-            println!("已儲存 {}", args[2]);
+            if !quiet() {
+                println!("已儲存 {}", args[2]);
+            }
         }
         "type" => {
-            for ch in args[2].chars() {
+            // Up to 32 characters per foreground check; fail-safe runs per chunk.
+            for chunk in args::type_chunks(&args[2]) {
                 active(&window)?;
-                gui.write(&ch.to_string(), Duration::ZERO)?;
+                gui.write(chunk, Duration::ZERO)?;
             }
-            println!("已輸入 {} 個字元", args[2].chars().count());
+            if !quiet() {
+                println!("已輸入 {} 個字元", args[2].chars().count());
+            }
         }
         "locate" | "click" => {
             let (needle, confidence, timeout) =
@@ -426,10 +460,22 @@ fn run() -> autogui::Result<()> {
     Ok(())
 }
 
-/// Runs the CLI with the process arguments; exits with code 1 on error.
+/// Runs the CLI with the process arguments and returns the exit code.
+pub fn run_cli() -> i32 {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let (globals, rest) = args::split(&raw);
+    QUIET.store(globals.quiet, Ordering::Relaxed);
+    JSON.store(globals.json, Ordering::Relaxed);
+    match run(rest) {
+        Ok(()) => 0,
+        Err(error) => errors::report(&error, globals.json),
+    }
+}
+
+/// Runs the CLI with the process arguments; exits with a non-zero code on error.
 pub fn main() {
-    if let Err(error) = run() {
-        eprintln!("操作失敗：{error}");
-        std::process::exit(1);
+    let code = run_cli();
+    if code != 0 {
+        std::process::exit(code);
     }
 }
