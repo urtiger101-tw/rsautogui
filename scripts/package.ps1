@@ -8,11 +8,14 @@ function Read-CrateVersion([string]$Path) {
     if ($text -match '(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"') { return $Matches[1] }
     throw "Cannot read [package] version from $Path"
 }
+# Every workspace package must share one version; a mismatch is a packaging error.
 $version = Read-CrateVersion (Join-Path $repo 'Cargo.toml')
-foreach ($crate in @('launcher', 'runtime')) {
-    $other = Read-CrateVersion (Join-Path $repo "$crate\Cargo.toml")
-    if ($other -ne $version) { Write-Warning "$crate version $other differs from root version $version" }
+$mismatch = @()
+foreach ($manifest in @('runtime', 'launcher', 'crates\protocol', 'crates\control')) {
+    $other = Read-CrateVersion (Join-Path $repo "$manifest\Cargo.toml")
+    if ($other -ne $version) { $mismatch += "$manifest\Cargo.toml=$other" }
 }
+if ($mismatch.Count) { throw "Version mismatch: root Cargo.toml is $version but $($mismatch -join ', '). Bump all five Cargo.toml files together." }
 function Find-Iscc {
     if ($IsccPath) {
         if (-not (Test-Path -LiteralPath $IsccPath -PathType Leaf)) { throw "ISCC not found at -IsccPath: $IsccPath" }
@@ -50,7 +53,7 @@ foreach ($name in @('install.ps1','uninstall.ps1','install.cmd','ConfigEditor.cs
 }
 Copy-Item -LiteralPath (Join-Path $repo 'skills') -Destination $OutputDir -Recurse
 New-Item -ItemType Directory -Path (Join-Path $OutputDir 'docs') | Out-Null
-foreach ($name in @('agent-installation.md','validation-agent.md','recognition-app-control.md','screensaver.md','virtual-display.md','validation-virtual-display.md','headless.md')) {
+foreach ($name in @('agent-installation.md','validation-agent.md','recognition-app-control.md','screensaver.md','virtual-display.md','validation-virtual-display.md','headless.md','performance.md')) {
     Copy-Item -LiteralPath (Join-Path $repo "docs\$name") -Destination (Join-Path $OutputDir 'docs')
 }
 New-Item -ItemType Directory -Path (Join-Path $OutputDir 'scripts') | Out-Null
