@@ -1,4 +1,5 @@
-use super::{Command, Record, needs_restore};
+use super::{Command, Record, needs_restore, text};
+use crate::cli::lang::zh;
 use autogui::{Error, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -321,8 +322,12 @@ impl Drop for PauseGuard<'_> {
         {
             let _ = writeln!(
                 std::io::stderr(),
-                "還原失敗：{error}；請解除鎖定後執行 screensaver resume。紀錄：{}",
-                self.context.journal.display()
+                "{}",
+                text::restore_failed(
+                    zh(),
+                    &error.to_string(),
+                    &self.context.journal.display().to_string()
+                )
             );
         }
     }
@@ -368,14 +373,14 @@ fn pause(seconds: u64, managed: bool) -> Result<()> {
     if managed {
         println!("AUTOGUI_PAUSE_READY");
     }
-    println!(
-        "已暫停螢幕保護程式自動啟動，{seconds} 秒後還原；Ctrl+C 或另開終端執行 screensaver resume 可提早還原。"
-    );
-    println!(
-        "原本啟用：{}；還原紀錄：{}",
+    for line in text::pause_started(
+        zh(),
+        seconds,
         record.original_enabled,
-        context.journal.display()
-    );
+        &context.journal.display().to_string(),
+    ) {
+        println!("{line}");
+    }
     std::io::stdout().flush()?;
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(seconds) && !INTERRUPTED.load(Ordering::SeqCst) {
@@ -391,7 +396,7 @@ fn pause(seconds: u64, managed: bool) -> Result<()> {
         }
     }
     guard.finish()?;
-    println!("暫停已結束，已完成原設定還原。");
+    println!("{}", text::pause_finished(zh()));
     Ok(())
 }
 
@@ -410,13 +415,13 @@ fn resume() -> Result<()> {
     // Close the signal handle before releasing the mutex for the next pause.
     drop(event);
     if context.restore()? {
-        println!("已依暫停紀錄還原原設定。");
+        println!("{}", text::restored_from_record(zh()));
     } else {
-        println!("目前沒有待還原的暫停紀錄；執行中的暫停已結束。");
+        println!("{}", text::nothing_to_restore(zh()));
     }
     println!(
-        "螢幕保護程式啟用：{}",
-        setting(SPI_GETSCREENSAVEACTIVE)? != 0
+        "{}",
+        text::enabled(zh(), setting(SPI_GETSCREENSAVEACTIVE)? != 0)
     );
     Ok(())
 }
@@ -446,40 +451,47 @@ pub(crate) fn input_desktop() -> Result<String> {
 }
 
 fn print_desktop() {
-    match input_desktop() {
-        Ok(name) => println!("目前輸入桌面：{name}"),
-        Err(error) => println!("目前輸入桌面：無法讀取（{error}）"),
-    }
+    println!(
+        "{}",
+        text::desktop(zh(), &input_desktop().map_err(|e| e.to_string()))
+    );
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) } == 0 {
-        println!(
-            "桌面游標存取：不可用（Windows 錯誤 {}）；若已鎖定仍需登入。",
-            unsafe { GetLastError() }
-        );
+        println!("{}", text::cursor(zh(), Some(unsafe { GetLastError() })));
     } else {
-        println!("桌面游標存取：可用");
+        println!("{}", text::cursor(zh(), None));
     }
 }
 
 fn status() -> Result<()> {
+    let zh = zh();
     println!(
-        "螢幕保護程式啟用：{}",
-        setting(SPI_GETSCREENSAVEACTIVE)? != 0
+        "{}",
+        text::enabled(zh, setting(SPI_GETSCREENSAVEACTIVE)? != 0)
     );
-    println!("目前執行中：{}", setting(SPI_GETSCREENSAVERRUNNING)? != 0);
-    println!("閒置啟動秒數：{}", setting(SPI_GETSCREENSAVETIMEOUT)?);
-    println!("恢復時需要登入：{}", setting(SPI_GETSCREENSAVESECURE)? != 0);
+    println!(
+        "{}",
+        text::running(zh, setting(SPI_GETSCREENSAVERRUNNING)? != 0)
+    );
+    println!(
+        "{}",
+        text::timeout(zh, setting(SPI_GETSCREENSAVETIMEOUT)? as u32)
+    );
+    println!(
+        "{}",
+        text::secure(zh, setting(SPI_GETSCREENSAVESECURE)? != 0)
+    );
     // Preserve useful diagnostics even when a corrupt recovery record causes
     // the rest of this command to return an error.
     print_desktop();
     let context = Context::new()?;
     let lock = MutexGuard::acquire(&context, 0)?;
     if lock.is_none() {
-        println!("本工具暫停：執行中");
+        println!("{}", text::pause_state(zh, text::Pause::Running));
     } else if context.record()?.is_some() {
-        println!("本工具暫停：有未完成的還原紀錄，請執行 screensaver resume");
+        println!("{}", text::pause_state(zh, text::Pause::Pending));
     } else {
-        println!("本工具暫停：未啟用");
+        println!("{}", text::pause_state(zh, text::Pause::Inactive));
     }
     Ok(())
 }
@@ -514,7 +526,7 @@ fn saver_process(hwnd: HWND) -> Result<Option<(u32, Handle)>> {
 
 fn stop() -> Result<()> {
     if setting(SPI_GETSCREENSAVERRUNNING)? == 0 {
-        println!("目前沒有正在執行的螢幕保護程式。");
+        println!("{}", text::none_running(zh()));
         print_desktop();
         return Ok(());
     }
@@ -570,7 +582,7 @@ fn stop() -> Result<()> {
     }
     if posted == 0 {
         if setting(SPI_GETSCREENSAVERRUNNING)? == 0 {
-            println!("螢幕保護程式已自行結束。");
+            println!("{}", text::ended_by_itself(zh()));
             print_desktop();
             return Ok(());
         }
@@ -588,7 +600,7 @@ fn stop() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    println!("已停止目前的螢幕保護程式；自動啟動設定維持原值。");
+    println!("{}", text::stopped(zh()));
     print_desktop();
     Ok(())
 }

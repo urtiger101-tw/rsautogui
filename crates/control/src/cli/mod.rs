@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod args;
 mod errors;
+pub(crate) mod lang;
+
+use lang::tr;
 
 /// Exit code for panics and other internal errors.
 pub use errors::INTERNAL as EXIT_INTERNAL;
@@ -105,14 +108,20 @@ pub(crate) fn unique_window(gui: &mut AutoGui, title: &str) -> autogui::Result<W
     let windows = gui.get_windows_with_title_ci(title)?;
     if windows.len() != 1 {
         for window in &windows {
-            eprintln!("候選視窗 {}: {}", window.hwnd(), window.title()?);
+            eprintln!(
+                "{}",
+                tr!(
+                    "Candidate window {}: {}",
+                    "候選視窗 {}: {}",
+                    window.hwnd(),
+                    window.title()?
+                )
+            );
         }
         return if windows.is_empty() {
             Err(Error::WindowNotFound)
         } else {
-            Err(Error::InvalidArgument(
-                "multiple windows match; supply a more specific title",
-            ))
+            Err(Error::InvalidArgument(errors::AMBIGUOUS_WINDOW))
         };
     }
     windows.into_iter().next().ok_or(Error::WindowNotFound)
@@ -199,9 +208,7 @@ pub(crate) fn locate_target(
         let matches = gui.locate_all(needle, &frame, &options)?;
         if window.is_active()? && window.box_rect()? == window_rect {
             if matches.len() > 1 {
-                return Err(Error::InvalidArgument(
-                    "multiple image matches; use a more distinctive template",
-                ));
+                return Err(Error::InvalidArgument(errors::AMBIGUOUS_IMAGE));
             }
             if let Some(found) = matches.first() {
                 return Ok((
@@ -388,8 +395,13 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
         "capture" => {
             let region = screen_region(&gui, &window, display.as_ref())?;
             capture_region(&mut gui, display.as_ref(), region)?.save(&args[2])?;
-            if !quiet() {
-                println!("已儲存 {}", args[2]);
+            if json_output() {
+                println!(
+                    "{}",
+                    serde_json::json!({"action": "capture", "path": args[2]})
+                );
+            } else if !quiet() {
+                println!("{}", tr!("Saved {}", "已儲存 {}", args[2]));
             }
         }
         "type" => {
@@ -398,8 +410,14 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
                 active(&window)?;
                 gui.write(chunk, Duration::ZERO)?;
             }
-            if !quiet() {
-                println!("已輸入 {} 個字元", args[2].chars().count());
+            let typed = args[2].chars().count();
+            if json_output() {
+                println!(
+                    "{}",
+                    serde_json::json!({"action": "type", "characters": typed})
+                );
+            } else if !quiet() {
+                println!("{}", tr!("Typed {} characters", "已輸入 {} 個字元", typed));
             }
         }
         "locate" | "click" => {
@@ -429,31 +447,39 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
                 )?;
                 active(&window)?;
                 if window.box_rect()? != captured_window {
-                    return Err(Error::InvalidArgument(
-                        "target window moved; retry recognition",
-                    ));
+                    return Err(Error::InvalidArgument(errors::WINDOW_MOVED));
                 }
                 if let Some(display) = &display {
                     gui.move_to_display(display, point)?;
                     active(&window)?;
                     display.validate()?;
                     if window.box_rect()? != captured_window || gui.position()? != point {
-                        return Err(Error::InvalidArgument(
-                            "target or cursor moved before click; retry recognition",
-                        ));
+                        return Err(Error::InvalidArgument(errors::CURSOR_MOVED));
                     }
                     gui.click()?;
                 } else {
                     gui.click_xy(point.x, point.y)?;
                 }
             }
-            println!(
-                "{} {:?}, center {:?}, window {}",
-                command,
-                found,
-                point,
-                window.hwnd()
-            );
+            if json_output() {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "action": command,
+                        "rect": {"left": found.left, "top": found.top, "width": found.width, "height": found.height},
+                        "center": {"x": point.x, "y": point.y},
+                        "hwnd": window.hwnd(),
+                    })
+                );
+            } else {
+                println!(
+                    "{} {:?}, center {:?}, window {}",
+                    command,
+                    found,
+                    point,
+                    window.hwnd()
+                );
+            }
         }
         _ => return Err(Error::InvalidArgument("unsupported command")),
     }

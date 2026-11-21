@@ -12,6 +12,7 @@ mod mcp_cmd;
 mod windows;
 
 /// MCP protocol version this build speaks.
+// TODO: use autogui_protocol::PROTOCOL_VERSION once the protocol crate exports it.
 pub const PROTOCOL: &str = "2025-11-25";
 /// C ABI version of autogui_runtime.dll this launcher accepts.
 pub const EXPECTED_ABI: u32 = 1;
@@ -69,6 +70,21 @@ pub fn usage_error(message: &str, suggestion: Option<&str>, json: bool, lang: La
     EXIT_USAGE
 }
 
+/// Picks the English or Traditional Chinese text.
+pub fn pick<'a>(lang: Lang, en: &'a str, zh: &'a str) -> &'a str {
+    match lang {
+        Lang::En => en,
+        Lang::Zh => zh,
+    }
+}
+
+fn unknown_command(name: &str, lang: Lang) -> String {
+    match lang {
+        Lang::En => format!("unknown command '{name}'"),
+        Lang::Zh => format!("未知的命令「{name}」"),
+    }
+}
+
 fn print_version(json: bool) {
     if json {
         let path = runtime_path();
@@ -95,7 +111,7 @@ fn run_mcp() -> i32 {
     match result {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("AutoGui: {e}");
+            eprintln!("autogui-control: {e}");
             EXIT_FAILED
         }
     }
@@ -113,14 +129,29 @@ fn run_runtime(lang: Lang, no_color: bool) -> i32 {
     match windows::run_cli() {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("autogui-control: {e}");
-            eprintln!("Run autogui-control doctor");
+            match lang {
+                Lang::En => {
+                    eprintln!("autogui-control: {e}");
+                    eprintln!("Run autogui-control doctor");
+                }
+                Lang::Zh => {
+                    eprintln!("autogui-control：{e}");
+                    eprintln!("請執行 autogui-control doctor");
+                }
+            }
             EXIT_BLOCKED
         }
     }
     #[cfg(not(windows))]
     {
-        eprintln!("autogui-control: Windows runtime required");
+        eprintln!(
+            "{}",
+            pick(
+                lang,
+                "autogui-control: Windows runtime required",
+                "autogui-control：需要 Windows 執行階段"
+            )
+        );
         EXIT_BLOCKED
     }
 }
@@ -133,9 +164,14 @@ fn run() -> i32 {
     let env_lang = std::env::var("AUTOGUI_LANG").ok();
     let parsed = match args::parse(&raw) {
         Ok(p) => p,
-        Err(message) => {
+        Err(error) => {
             let lang = help::resolve_lang(None, env_lang.as_deref(), ui_language());
-            return usage_error(&message, None, raw.iter().any(|a| a == "--json"), lang);
+            return usage_error(
+                &error.message(lang),
+                None,
+                raw.iter().any(|a| a == "--json"),
+                lang,
+            );
         }
     };
     let lang = help::resolve_lang(parsed.lang.as_deref(), env_lang.as_deref(), ui_language());
@@ -164,7 +200,7 @@ fn run() -> i32 {
                     0
                 }
                 None => usage_error(
-                    &format!("unknown command '{name}'"),
+                    &unknown_command(name, lang),
                     help::suggest(name),
                     parsed.json,
                     lang,
@@ -177,7 +213,7 @@ fn run() -> i32 {
     };
     if !help::is_known(command) {
         return usage_error(
-            &format!("unknown command '{command}'"),
+            &unknown_command(command, lang),
             help::suggest(command),
             parsed.json,
             lang,
@@ -187,7 +223,12 @@ fn run() -> i32 {
         "doctor" if parsed.rest.len() == 1 => {
             doctor::run(lang, no_color, parsed.json, parsed.quiet)
         }
-        "doctor" => usage_error("doctor takes no arguments", None, parsed.json, lang),
+        "doctor" => usage_error(
+            pick(lang, "doctor takes no arguments", "doctor 不接受參數"),
+            None,
+            parsed.json,
+            lang,
+        ),
         "mcp" if parsed.rest.len() == 1 => run_mcp(),
         "mcp" => mcp_cmd::run(&parsed.rest[1..], parsed.json, lang),
         _ => run_runtime(lang, no_color),

@@ -1,12 +1,12 @@
 # Windows 螢幕保護程式控制
 
-`app_control` 提供 `screensaver` 子命令，能查詢狀態、定時暫停自動啟動、提早恢復與停止目前的螢幕保護程式。此功能是 Windows CLI 擴充；既有 Rust library API 維持相容。
+`autogui-control` 提供 `screensaver` 子命令，能查詢狀態、定時暫停自動啟動、提早恢復與停止目前的螢幕保護程式。此功能是 Windows CLI 擴充；既有 Rust library API 維持相容。
 
 ## 使用
 
 ```powershell
-cargo build --release --features opencv --example app_control
-$control = '.\target\release\examples\app_control.exe'
+cargo build --release --workspace --locked
+$control = '.\target\release\autogui-control.exe'
 & $control screensaver status
 & $control screensaver stop
 & $control screensaver pause 900
