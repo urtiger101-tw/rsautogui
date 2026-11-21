@@ -15,11 +15,8 @@ pub extern "C" fn autogui_abi_version() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn autogui_cli_main() -> i32 {
-    if std::panic::catch_unwind(app::cli::main).is_ok() {
-        0
-    } else {
-        1
-    }
+    // Exit codes are documented in autogui-control --help; 70 = internal error.
+    std::panic::catch_unwind(app::cli::run_cli).unwrap_or(app::cli::EXIT_INTERNAL)
 }
 
 /// # Safety

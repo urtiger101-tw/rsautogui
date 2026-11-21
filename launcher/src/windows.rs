@@ -13,28 +13,60 @@ struct Engine {
     call: Call,
     close: Close,
 }
+fn open_library() -> Result<HMODULE> {
+    let path = crate::runtime_path();
+    use std::os::windows::ffi::OsStrExt;
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let handle = unsafe {
+        LoadLibraryExW(
+            path.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    if handle.is_null() {
+        return Err(Error::other(format!(
+            "Cannot load adjacent autogui_runtime.dll: {}. Keep EXE and DLL together.",
+            Error::last_os_error()
+        )));
+    }
+    Ok(handle)
+}
+
+/// ABI version reported by the adjacent DLL (no compatibility check).
+pub(super) fn abi_version() -> Result<u32> {
+    let handle = open_library()?;
+    let abi = unsafe { GetProcAddress(handle, c"autogui_abi_version".as_ptr().cast()) }
+        .ok_or_else(|| Error::other("Runtime ABI export missing"))?;
+    let abi: unsafe extern "C" fn() -> u32 = unsafe { std::mem::transmute(abi) };
+    Ok(unsafe { abi() })
+}
+
+/// Read-only session_status tool result (parsed JSON payload).
+pub(super) fn session_status() -> Result<Value> {
+    use super::mcp::Handler;
+    let reply = LazyEngine::default().call("session_status", json!({}), &|| Ok(()))?;
+    if reply["isError"] == true {
+        return Err(Error::other(
+            reply["content"][0]["text"]
+                .as_str()
+                .unwrap_or("session_status failed")
+                .to_string(),
+        ));
+    }
+    let text = reply["content"][0]["text"]
+        .as_str()
+        .ok_or_else(|| Error::other("session_status returned no text"))?;
+    serde_json::from_str(text).map_err(Error::other)
+}
+
 impl Engine {
     fn load() -> Result<Self> {
-        let path = std::env::current_exe()?.with_file_name("autogui_runtime.dll");
-        use std::os::windows::ffi::OsStrExt;
-        let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let handle = unsafe {
-            LoadLibraryExW(
-                path.as_ptr(),
-                std::ptr::null_mut(),
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-            )
-        };
-        if handle.is_null() {
-            return Err(Error::other(format!(
-                "Cannot load adjacent autogui_runtime.dll: {}. Keep EXE and DLL together.",
-                Error::last_os_error()
-            )));
-        }
+        let handle = open_library()?;
         let abi = unsafe { GetProcAddress(handle, c"autogui_abi_version".as_ptr().cast()) }
             .ok_or_else(|| Error::other("Runtime ABI export missing"))?;
         let abi: unsafe extern "C" fn() -> u32 = unsafe { std::mem::transmute(abi) };
-        if unsafe { abi() } != 1 {
+        if unsafe { abi() } != crate::EXPECTED_ABI {
             return Err(Error::other("Runtime ABI version mismatch"));
         }
         let call = unsafe { GetProcAddress(handle, c"autogui_call_json".as_ptr().cast()) }
@@ -116,14 +148,11 @@ impl super::mcp::Handler for LazyEngine {
         .map_err(Error::other)
     }
 }
-pub(super) fn run_cli() -> Result<()> {
+/// Runs the runtime CLI; returns its exit code.
+pub(super) fn run_cli() -> Result<i32> {
     let engine = Engine::load()?;
     let entry = unsafe { GetProcAddress(engine._handle, c"autogui_cli_main".as_ptr().cast()) }
         .ok_or_else(|| Error::other("Runtime CLI export missing"))?;
     let entry: unsafe extern "C" fn() -> i32 = unsafe { std::mem::transmute(entry) };
-    if unsafe { entry() } == 0 {
-        Ok(())
-    } else {
-        Err(Error::other("Runtime command failed"))
-    }
+    Ok(unsafe { entry() })
 }

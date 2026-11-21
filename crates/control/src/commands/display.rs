@@ -72,12 +72,14 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
             AutoGui::new()?
                 .screenshot_display(&display)?
                 .save(&args[2])?;
-            println!(
-                "Saved {} from {} {:?} (desktop physical pixels)",
-                args[2],
-                display.name(),
-                display.bounds()
-            );
+            if !crate::cli::quiet() {
+                println!(
+                    "Saved {} from {} {:?} (desktop physical pixels)",
+                    args[2],
+                    display.name(),
+                    display.bounds()
+                );
+            }
             Ok(())
         }
         Some("move") if args.len() == 3 => {
