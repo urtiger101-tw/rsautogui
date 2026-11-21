@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  windows:
+    name: Windows (fmt, clippy, test, MCP protocol)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      # Live tests that move the real mouse/keyboard are #[ignore]d and need
+      # AUTOGUI_LIVE=1; they never run here.
+      - name: Test
+        run: cargo test --workspace --all-features --locked
+
+      - name: Build release
+        run: cargo build --release --workspace --locked
+
+      # Sends no input: checks lazy DLL loading, JSON-RPC errors, the tool
+      # catalogue, input refusals without a capture proof and missing-DLL text.
+      - name: MCP protocol
+        shell: powershell
+        run: ./tests/mcp-protocol.ps1 -Executable target/release/autogui-control.exe
+
+      # In-memory only (no --capture); asserts every case finds its box.
+      - name: Recognition benchmark (smoke)
+        run: cargo run --release --locked --features opencv --example recognition_bench -- --full-hd --iterations 3
+
+  linux:
+    name: Linux (compile check)
+    runs-on: ubuntu-latest
+    # SPEC: non-Windows targets must compile. System libraries for xcap and
+    # enigo are a best guess, so this job reports without blocking.
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (xcap, enigo)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev \
+            libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev \
+            libwayland-dev libegl-dev libgbm-dev libxdo-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check workspace
+        run: cargo check --workspace --locked
+
+      - name: Test library without OS backends
+        run: cargo test -p autogui --no-default-features --locked
