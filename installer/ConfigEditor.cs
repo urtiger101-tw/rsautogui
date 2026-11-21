@@ -1,4 +1,4 @@
-// Adds one object property to JSON/JSONC without reformatting unrelated content.
+// Reads or adds one object property in JSON/JSONC without reformatting unrelated content.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -69,6 +69,16 @@ public static class AutoGuiJson {
             node.End = pos; return node;
         }
         public Node Parse() { var n = Value(0); Skip(); if (pos != text.Length) throw new FormatException("Trailing config content"); return n; }
+    }
+    // Returns the raw text of container.name, or null when the config does not define it.
+    public static string ServerValue(string text, string container, string name) {
+        var root = new Parser(text).Parse();
+        if (!root.Object) throw new FormatException("Config root must be an object");
+        Node destination, server;
+        if (!root.Members.TryGetValue(container, out destination)) return null;
+        if (!destination.Object) throw new FormatException(container + " must be an object");
+        if (!destination.Members.TryGetValue(name, out server)) return null;
+        return text.Substring(server.Start, server.End - server.Start);
     }
     public static string AddServer(string text, string container, string name, string value) {
         var root = new Parser(text).Parse();
