@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.2 — 2026-11-21
+
 ### Fixed
 
 - Installer: Setup no longer enables Windows RedirectionGuard (Inno Setup 6.7 turns it on by default, and `install.ps1` inherited it). With it on, junctions created by the user were not followed, so the standard Codex CLI under `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` (a junction) was not found and Codex MCP registration was skipped. Setup runs per user and never elevates.

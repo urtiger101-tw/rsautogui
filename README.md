@@ -10,7 +10,7 @@ The `autogui` library is independently implemented in Rust and modeled on PyAuto
 
 ### 1. 安裝
 
-需要 Windows 10 1703 以上（x64）。執行 `AutoGui-0.2.1-setup.exe`（每位使用者安裝，不需系統管理員權限、不修改 PATH），或解壓縮發行包後執行 `install.cmd`。預設安裝位置是 `%LOCALAPPDATA%\Programs\AutoGui`。
+需要 Windows 10 1703 以上（x64）。執行 `AutoGui-0.2.2-setup.exe`（每位使用者安裝，不需系統管理員權限、不修改 PATH），或解壓縮發行包後執行 `install.cmd`。預設安裝位置是 `%LOCALAPPDATA%\Programs\AutoGui`。
 
 ```powershell
 $exe = "$env:LOCALAPPDATA\Programs\AutoGui\autogui-control.exe"
