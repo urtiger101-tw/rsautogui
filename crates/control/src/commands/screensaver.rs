@@ -44,7 +44,7 @@ fn parse(args: &[String]) -> Result<Command> {
     }
 }
 
-pub(super) fn run(args: &[String]) -> Result<()> {
+pub(crate) fn run(args: &[String]) -> Result<()> {
     let command = parse(args)?;
     #[cfg(windows)]
     {

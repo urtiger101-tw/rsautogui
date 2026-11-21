@@ -1,5 +1,4 @@
-#[path = "../../examples/support/mcp.rs"]
-mod mcp;
+use autogui_protocol::server as mcp;
 #[cfg(windows)]
 mod windows;
 

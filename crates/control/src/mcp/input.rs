@@ -1,5 +1,5 @@
 //! Capture-bound pointer input and bounded Unicode text batches.
-use super::{active, capture_region, screen_region};
+use crate::cli::{active, capture_region, screen_region};
 use autogui::{AutoGui, Display, Error, MouseButton, Point, Rect, Result, Screenshot, Window};
 use std::time::{Duration, Instant};
 

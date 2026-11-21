@@ -1,0 +1,9 @@
+[package]
+name = "autogui-protocol"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "MCP stdio protocol and tool catalogue for autogui-control"
+
+[dependencies]
+serde_json = "1"

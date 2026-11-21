@@ -1,11 +1,10 @@
 //! Versioned C boundary: no Rust allocator or unwinding crosses the DLL boundary.
-#[path = "../../examples/app_control.rs"]
-mod app;
+use autogui_control_core as app;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-thread_local! { static SESSION: RefCell<app::mcp_tools::Session> = RefCell::new(Default::default()); }
+thread_local! { static SESSION: RefCell<app::mcp::session::Session> = RefCell::new(Default::default()); }
 type Check = unsafe extern "C" fn(*mut c_void) -> bool;
 type Reply = unsafe extern "C" fn(*mut c_void, *const u8, usize);
 
@@ -16,7 +15,7 @@ pub extern "C" fn autogui_abi_version() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn autogui_cli_main() -> i32 {
-    if std::panic::catch_unwind(app::main).is_ok() {
+    if std::panic::catch_unwind(app::cli::main).is_ok() {
         0
     } else {
         1
@@ -59,7 +58,7 @@ pub unsafe extern "C" fn autogui_call_json(
         let value = match value {
             Ok(v) => v,
             Err(e) => {
-                json!({"content":[{"type":"text","text":app::mcp_tools::describe(&e)}],"isError":true})
+                json!({"content":[{"type":"text","text":app::mcp::errors::describe(&e)}],"isError":true})
             }
         };
         let bytes = serde_json::to_vec(&value).map_err(std::io::Error::other)?;
