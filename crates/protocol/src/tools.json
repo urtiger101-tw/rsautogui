@@ -1,11 +1,90 @@
 [
   {
     "name": "session_status",
+    "title": "Session Status",
     "description": "Read-only readiness check for unattended or monitor-less automation: Windows session id/console/remote state, lock, input desktop, cursor access, active displays and a small primary-monitor capture probe. Returns ready=false with blocker codes and advice (e.g. no-active-display -> optional virtual display driver; session-not-active -> RDP was disconnected). Never unlocks, reconnects or changes settings.",
     "inputSchema": {
       "type": "object",
       "properties": {},
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "boolean",
+          "description": "True when unattended input and capture should work."
+        },
+        "session_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "console_session_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "on_console": {
+          "type": "boolean",
+          "description": "True when this is the console session."
+        },
+        "remote": {
+          "type": "boolean",
+          "description": "True for a Remote Desktop session."
+        },
+        "connect_state": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "WTS connect state."
+        },
+        "locked": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Workstation lock state, if known."
+        },
+        "input_desktop": {
+          "description": "Input desktop name, or {error}."
+        },
+        "cursor_access": {
+          "description": "Whether the cursor position could be read."
+        },
+        "displays": {
+          "description": "Active displays, or {error}."
+        },
+        "primary_capture_probe": {
+          "description": "Small capture probe result {ok, uniform|error}, or null."
+        },
+        "findings": {
+          "type": "array",
+          "description": "Blockers and warnings with codes and advice.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "blocker",
+                  "warning"
+                ]
+              },
+              "code": {
+                "type": "string"
+              },
+              "advice": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": true
     },
     "annotations": {
       "readOnlyHint": true,
@@ -16,12 +95,72 @@
   },
   {
     "name": "displays_list",
+    "title": "List Displays",
     "description": "Enumerate active Windows displays, including IDD virtual monitors. Returns connection-scoped display references, device names and physical desktop bounds. Re-list invalidates old display references. Does not install or enable a driver.",
     "inputSchema": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "displays": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "display": {
+                "type": "string",
+                "description": "Session display reference for other tools."
+              },
+              "device_name": {
+                "type": "string",
+                "description": "Windows device name, e.g. \\\\.\\DISPLAY1."
+              },
+              "friendly_name": {
+                "type": "string",
+                "description": "Monitor name."
+              },
+              "id": {
+                "description": "Monitor id."
+              },
+              "rect": {
+                "type": "object",
+                "description": "Bounds in Windows desktop physical pixels.",
+                "properties": {
+                  "left": {
+                    "type": "integer"
+                  },
+                  "top": {
+                    "type": "integer"
+                  },
+                  "width": {
+                    "type": "integer"
+                  },
+                  "height": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "primary": {
+                "type": "boolean",
+                "description": "True for the primary monitor."
+              },
+              "coordinates": {
+                "type": "string",
+                "description": "Coordinate system of rect."
+              }
+            }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "Usage note."
+        }
+      },
+      "additionalProperties": true
     },
     "annotations": {
       "readOnlyHint": true,
@@ -32,6 +171,7 @@
   },
   {
     "name": "display_capture",
+    "title": "Capture Display",
     "description": "Capture a real PNG from a selected physical or IDD virtual display without activating a window. Default is the full display. A supplied region uses global desktop physical pixels and must fit entirely inside it; at most 16 megapixels. Returns a screen-level capture_id for one click_at/pointer_move/drag/scroll (pass display, not target) within 60 seconds, with coordinates relative to this image; useful when a window refuses focus. New captures and other tool calls (except session_status and cursor_position) invalidate it.",
     "inputSchema": {
       "type": "object",
@@ -72,6 +212,59 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "description": "Capture metadata; the PNG is returned as an image content block.",
+      "properties": {
+        "display": {
+          "type": "string",
+          "description": "Display reference captured."
+        },
+        "region": {
+          "type": "object",
+          "description": "Captured region in Windows desktop physical pixels.",
+          "properties": {
+            "left": {
+              "type": "integer"
+            },
+            "top": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate system of region."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "Single-use proof for one click_at/pointer_move/drag/scroll."
+        },
+        "pointer_coordinates": {
+          "type": "string",
+          "description": "Coordinate system pointer tools expect for this capture."
+        },
+        "expires_in_seconds": {
+          "type": "integer",
+          "description": "Seconds until capture_id expires."
+        },
+        "single_use": {
+          "type": "boolean",
+          "description": "capture_id is consumed by the next pointer call."
+        },
+        "device_name": {
+          "type": "string",
+          "description": "Windows device name of the display."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -81,6 +274,7 @@
   },
   {
     "name": "window_to_display",
+    "title": "Move Window to Display",
     "description": "Restore a minimized/maximized target, then move it 16 pixels inside a selected display and shrink it if needed. Uses real Win32 actions; returns previous and current geometry. Partial changes may remain if the app rejects resizing. Shared Windows focus/cursor; not a separate session.",
     "inputSchema": {
       "type": "object",
@@ -100,6 +294,110 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Window target moved."
+        },
+        "display": {
+          "type": "string",
+          "description": "Destination display reference."
+        },
+        "previous": {
+          "type": "object",
+          "description": "Window state before the move.",
+          "properties": {
+            "hwnd": {
+              "type": "string",
+              "description": "Window handle as a decimal string."
+            },
+            "title": {
+              "type": "string",
+              "description": "Window title."
+            },
+            "rect": {
+              "type": "object",
+              "description": "Window bounds in Windows desktop physical pixels.",
+              "properties": {
+                "left": {
+                  "type": "integer"
+                },
+                "top": {
+                  "type": "integer"
+                },
+                "width": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                }
+              }
+            },
+            "active": {
+              "type": "boolean",
+              "description": "True when the window is in the foreground."
+            },
+            "minimized": {
+              "type": "boolean",
+              "description": "True when the window is minimized."
+            },
+            "maximized": {
+              "type": "boolean",
+              "description": "True when the window is maximized."
+            }
+          },
+          "additionalProperties": true
+        },
+        "current": {
+          "type": "object",
+          "description": "Window state after the move.",
+          "properties": {
+            "hwnd": {
+              "type": "string",
+              "description": "Window handle as a decimal string."
+            },
+            "title": {
+              "type": "string",
+              "description": "Window title."
+            },
+            "rect": {
+              "type": "object",
+              "description": "Window bounds in Windows desktop physical pixels.",
+              "properties": {
+                "left": {
+                  "type": "integer"
+                },
+                "top": {
+                  "type": "integer"
+                },
+                "width": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                }
+              }
+            },
+            "active": {
+              "type": "boolean",
+              "description": "True when the window is in the foreground."
+            },
+            "minimized": {
+              "type": "boolean",
+              "description": "True when the window is minimized."
+            },
+            "maximized": {
+              "type": "boolean",
+              "description": "True when the window is maximized."
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -109,6 +407,7 @@
   },
   {
     "name": "windows_list",
+    "title": "List Windows",
     "description": "Enumerate visible Win32 windows. Optional filters: case-insensitive title substring, process executable name (e.g. notepad or notepad.exe), foreground only, titled only. Returns scoped target references with pid, process and class (null when unavailable); invalidates previous references.",
     "inputSchema": {
       "type": "object",
@@ -135,6 +434,89 @@
       "required": [],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "windows": {
+          "type": "array",
+          "description": "Matching windows; previous targets are invalid.",
+          "items": {
+            "type": "object",
+            "description": "A window with a session target reference.",
+            "properties": {
+              "target": {
+                "type": "string",
+                "description": "Session target reference for other tools; invalidated by any re-list."
+              },
+              "hwnd": {
+                "type": "string",
+                "description": "Window handle as a decimal string."
+              },
+              "title": {
+                "type": "string",
+                "description": "Window title."
+              },
+              "rect": {
+                "type": "object",
+                "description": "Window bounds in Windows desktop physical pixels.",
+                "properties": {
+                  "left": {
+                    "type": "integer"
+                  },
+                  "top": {
+                    "type": "integer"
+                  },
+                  "width": {
+                    "type": "integer"
+                  },
+                  "height": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "active": {
+                "type": "boolean",
+                "description": "True when the window is in the foreground."
+              },
+              "minimized": {
+                "type": "boolean",
+                "description": "True when the window is minimized."
+              },
+              "maximized": {
+                "type": "boolean",
+                "description": "True when the window is maximized."
+              },
+              "pid": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Owning process id, when readable."
+              },
+              "process": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Owning process executable name, when readable."
+              },
+              "class": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Window class name."
+              }
+            }
+          }
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate system of rect."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -144,6 +526,7 @@
   },
   {
     "name": "window_control",
+    "title": "Control Window",
     "description": "Direct Win32 window state/geometry control. Close posts WM_CLOSE, which may prompt to save; no force kill. All actions validate original HWND/process/thread identity.",
     "inputSchema": {
       "type": "object",
@@ -188,6 +571,59 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "description": "Window state after the action, or {close_requested, note} for close.",
+      "properties": {
+        "hwnd": {
+          "type": "string",
+          "description": "Window handle as a decimal string."
+        },
+        "title": {
+          "type": "string",
+          "description": "Window title."
+        },
+        "rect": {
+          "type": "object",
+          "description": "Window bounds in Windows desktop physical pixels.",
+          "properties": {
+            "left": {
+              "type": "integer"
+            },
+            "top": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "description": "True when the window is in the foreground."
+        },
+        "minimized": {
+          "type": "boolean",
+          "description": "True when the window is minimized."
+        },
+        "maximized": {
+          "type": "boolean",
+          "description": "True when the window is maximized."
+        },
+        "close_requested": {
+          "type": "boolean",
+          "description": "Present for action=close: WM_CLOSE was posted."
+        },
+        "note": {
+          "type": "string",
+          "description": "Present for action=close."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -197,6 +633,7 @@
   },
   {
     "name": "capture",
+    "title": "Capture Window",
     "description": "Activate target and return its visible region on the selected display (default primary). PNG metadata uses Windows desktop physical pixels. Not offscreen rendering. Returns capture_id for one click_at/pointer_move/drag/scroll (pass target) within 60 seconds; coordinates for those tools are relative to this image. New captures and other tool calls (except session_status and cursor_position) invalidate it.",
     "inputSchema": {
       "type": "object",
@@ -215,6 +652,62 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "description": "Capture metadata; the PNG is returned as an image content block.",
+      "properties": {
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference used, or null for the primary monitor."
+        },
+        "region": {
+          "type": "object",
+          "description": "Captured region in Windows desktop physical pixels.",
+          "properties": {
+            "left": {
+              "type": "integer"
+            },
+            "top": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate system of region."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "Single-use proof for one click_at/pointer_move/drag/scroll."
+        },
+        "pointer_coordinates": {
+          "type": "string",
+          "description": "Coordinate system pointer tools expect for this capture."
+        },
+        "expires_in_seconds": {
+          "type": "integer",
+          "description": "Seconds until capture_id expires."
+        },
+        "single_use": {
+          "type": "boolean",
+          "description": "capture_id is consumed by the next pointer call."
+        },
+        "target": {
+          "type": "string",
+          "description": "Window target captured (it was activated)."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -224,6 +717,7 @@
   },
   {
     "name": "locate",
+    "title": "Locate Image",
     "description": "Activate target and find one template in its visible selected-display region (default primary). Returns desktop physical coordinates, possibly negative. Multiple/no matches fail. Exact and confidence are mutually exclusive.",
     "inputSchema": {
       "type": "object",
@@ -269,6 +763,57 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "rect": {
+          "type": "object",
+          "description": "Matched region in Windows desktop physical pixels.",
+          "properties": {
+            "left": {
+              "type": "integer"
+            },
+            "top": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "center": {
+          "type": "object",
+          "description": "Center of the match.",
+          "properties": {
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            }
+          }
+        },
+        "clicked": {
+          "type": "boolean",
+          "description": "True when click_image clicked the match."
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference used, or null."
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate system of rect and center."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -278,6 +823,7 @@
   },
   {
     "name": "click_image",
+    "title": "Click Image",
     "description": "Recognize one image then recheck pixels, foreground and geometry before sending a real click. Inspect capture first; template must be distinctive.",
     "inputSchema": {
       "type": "object",
@@ -323,6 +869,57 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "rect": {
+          "type": "object",
+          "description": "Matched region in Windows desktop physical pixels.",
+          "properties": {
+            "left": {
+              "type": "integer"
+            },
+            "top": {
+              "type": "integer"
+            },
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "center": {
+          "type": "object",
+          "description": "Center of the match.",
+          "properties": {
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            }
+          }
+        },
+        "clicked": {
+          "type": "boolean",
+          "description": "True when click_image clicked the match."
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference used, or null."
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate system of rect and center."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -332,6 +929,7 @@
   },
   {
     "name": "click_at",
+    "title": "Click at Captured Point",
     "description": "Send a real click (left/right/middle, 1-3 clicks) at an observed image point using a single-use proof from capture (pass target) or display_capture (pass display). Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
     "inputSchema": {
       "type": "object",
@@ -382,6 +980,54 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Window target the capture was bound to, if any."
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference the capture was bound to, if any."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "The consumed capture proof."
+        },
+        "x": {
+          "type": "integer",
+          "description": "Screen x the input was sent to (desktop physical pixels)."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Screen y the input was sent to (desktop physical pixels)."
+        },
+        "note": {
+          "type": "string",
+          "description": "What happened and how to verify it."
+        },
+        "clicked": {
+          "type": "boolean",
+          "description": "True when the click was sent."
+        },
+        "button": {
+          "type": "string",
+          "description": "Mouse button."
+        },
+        "clicks": {
+          "type": "integer",
+          "description": "Click count."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -391,6 +1037,7 @@
   },
   {
     "name": "pointer_move",
+    "title": "Move Pointer",
     "description": "Move the real cursor to an observed image point (e.g. to reveal hover menus or tooltips) using a single-use proof from capture (pass target) or display_capture (pass display). Sends no button or wheel input. Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
     "inputSchema": {
       "type": "object",
@@ -425,6 +1072,46 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Window target the capture was bound to, if any."
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference the capture was bound to, if any."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "The consumed capture proof."
+        },
+        "x": {
+          "type": "integer",
+          "description": "Screen x the input was sent to (desktop physical pixels)."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Screen y the input was sent to (desktop physical pixels)."
+        },
+        "note": {
+          "type": "string",
+          "description": "What happened and how to verify it."
+        },
+        "moved": {
+          "type": "boolean",
+          "description": "True when the cursor moved."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -434,6 +1121,7 @@
   },
   {
     "name": "drag",
+    "title": "Drag",
     "description": "Press a mouse button at one observed image point, move to a second point of the same image and release, using a single-use proof from capture (pass target) or display_capture (pass display). Both points must lie inside the captured image (and window). The button is released on every error path. Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
     "inputSchema": {
       "type": "object",
@@ -496,6 +1184,62 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Window target the capture was bound to, if any."
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference the capture was bound to, if any."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "The consumed capture proof."
+        },
+        "x": {
+          "type": "integer",
+          "description": "Screen x the input was sent to (desktop physical pixels)."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Screen y the input was sent to (desktop physical pixels)."
+        },
+        "note": {
+          "type": "string",
+          "description": "What happened and how to verify it."
+        },
+        "dragged": {
+          "type": "boolean",
+          "description": "True when the drag completed."
+        },
+        "to": {
+          "type": "object",
+          "description": "Drag destination in desktop physical pixels.",
+          "properties": {
+            "x": {
+              "type": "integer"
+            },
+            "y": {
+              "type": "integer"
+            }
+          }
+        },
+        "button": {
+          "type": "string",
+          "description": "Mouse button held."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -505,6 +1249,7 @@
   },
   {
     "name": "scroll",
+    "title": "Scroll",
     "description": "Send wheel input at an observed image point using a single-use proof from capture (pass target) or display_capture (pass display). Checks the proof binding, freshness, display, cursor, cancellation and exact pixels in a clipped 32x32 patch before input; window proofs also check target identity, foreground and bounds. Does not activate a lost-focus window. Every attempt consumes the proof. Hover/animation changes may require a fresh capture with the cursor positioned. Changes outside the patch and changes after the final check are not detected. Capture again to verify the result.",
     "inputSchema": {
       "type": "object",
@@ -550,6 +1295,50 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Window target the capture was bound to, if any."
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Display reference the capture was bound to, if any."
+        },
+        "capture_id": {
+          "type": "string",
+          "description": "The consumed capture proof."
+        },
+        "x": {
+          "type": "integer",
+          "description": "Screen x the input was sent to (desktop physical pixels)."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Screen y the input was sent to (desktop physical pixels)."
+        },
+        "note": {
+          "type": "string",
+          "description": "What happened and how to verify it."
+        },
+        "scroll_clicks": {
+          "type": "integer",
+          "description": "Wheel clicks sent (negative = down/left)."
+        },
+        "horizontal": {
+          "type": "boolean",
+          "description": "True for horizontal scrolling."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -559,12 +1348,31 @@
   },
   {
     "name": "cursor_position",
+    "title": "Cursor Position",
     "description": "Read-only: return the current cursor position in Windows desktop physical pixels (origin at primary top-left). Does not consume or invalidate a capture proof.",
     "inputSchema": {
       "type": "object",
       "properties": {},
       "required": [],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "description": "Cursor x."
+        },
+        "y": {
+          "type": "integer",
+          "description": "Cursor y."
+        },
+        "coordinates": {
+          "type": "string",
+          "description": "Coordinate system of x/y."
+        }
+      },
+      "additionalProperties": true
     },
     "annotations": {
       "readOnlyHint": true,
@@ -575,6 +1383,7 @@
   },
   {
     "name": "window_wait",
+    "title": "Wait for Window",
     "description": "Poll every 100 ms until windows matching title and/or process are present, absent, or in the foreground, up to timeout. Cancellable. On success returns the matching windows as fresh targets (like windows_list) and invalidates previous targets; on timeout fails without changing targets.",
     "inputSchema": {
       "type": "object",
@@ -607,6 +1416,97 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "Requested state."
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "description": "Time waited."
+        },
+        "windows": {
+          "type": "array",
+          "description": "Matching windows; previous targets are invalid.",
+          "items": {
+            "type": "object",
+            "description": "A window with a session target reference.",
+            "properties": {
+              "target": {
+                "type": "string",
+                "description": "Session target reference for other tools; invalidated by any re-list."
+              },
+              "hwnd": {
+                "type": "string",
+                "description": "Window handle as a decimal string."
+              },
+              "title": {
+                "type": "string",
+                "description": "Window title."
+              },
+              "rect": {
+                "type": "object",
+                "description": "Window bounds in Windows desktop physical pixels.",
+                "properties": {
+                  "left": {
+                    "type": "integer"
+                  },
+                  "top": {
+                    "type": "integer"
+                  },
+                  "width": {
+                    "type": "integer"
+                  },
+                  "height": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "active": {
+                "type": "boolean",
+                "description": "True when the window is in the foreground."
+              },
+              "minimized": {
+                "type": "boolean",
+                "description": "True when the window is minimized."
+              },
+              "maximized": {
+                "type": "boolean",
+                "description": "True when the window is maximized."
+              },
+              "pid": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Owning process id, when readable."
+              },
+              "process": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Owning process executable name, when readable."
+              },
+              "class": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Window class name."
+              }
+            }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "Usage note."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": true,
       "destructiveHint": false,
@@ -616,6 +1516,7 @@
   },
   {
     "name": "app_launch",
+    "title": "Launch App",
     "description": "Start a local program directly (no shell): absolute path to an existing .exe only (.cmd/.bat/.ps1/.lnk rejected), up to 32 literal arguments, optional absolute cwd. Disabled unless the MCP server was started with AUTOGUI_ALLOW_LAUNCH=1. Returns the pid without waiting for exit; with wait_title it also waits for a matching window and returns fresh targets.",
     "inputSchema": {
       "type": "object",
@@ -654,6 +1555,93 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "description": "Started process id."
+        },
+        "windows": {
+          "type": "array",
+          "description": "Matching windows; previous targets are invalid.",
+          "items": {
+            "type": "object",
+            "description": "A window with a session target reference.",
+            "properties": {
+              "target": {
+                "type": "string",
+                "description": "Session target reference for other tools; invalidated by any re-list."
+              },
+              "hwnd": {
+                "type": "string",
+                "description": "Window handle as a decimal string."
+              },
+              "title": {
+                "type": "string",
+                "description": "Window title."
+              },
+              "rect": {
+                "type": "object",
+                "description": "Window bounds in Windows desktop physical pixels.",
+                "properties": {
+                  "left": {
+                    "type": "integer"
+                  },
+                  "top": {
+                    "type": "integer"
+                  },
+                  "width": {
+                    "type": "integer"
+                  },
+                  "height": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "active": {
+                "type": "boolean",
+                "description": "True when the window is in the foreground."
+              },
+              "minimized": {
+                "type": "boolean",
+                "description": "True when the window is minimized."
+              },
+              "maximized": {
+                "type": "boolean",
+                "description": "True when the window is maximized."
+              },
+              "pid": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Owning process id, when readable."
+              },
+              "process": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Owning process executable name, when readable."
+              },
+              "class": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Window class name."
+              }
+            }
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": "Usage note."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -663,6 +1651,7 @@
   },
   {
     "name": "type_text",
+    "title": "Type Text",
     "description": "Activate target and send Unicode text to the focused control, in batches of at most 32 Unicode scalar values. Rechecks foreground and cancellation before every batch; preserves per-character fail-safe checks. Partial text (up to one batch after focus changes) may be sent before cancellation/failure.",
     "inputSchema": {
       "type": "object",
@@ -683,6 +1672,20 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "characters_sent": {
+          "type": "integer",
+          "description": "Unicode characters sent."
+        },
+        "note": {
+          "type": "string",
+          "description": "How to verify the result."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -692,6 +1695,7 @@
   },
   {
     "name": "hotkey",
+    "title": "Press Hotkey",
     "description": "Validate key names, then activate target and send a chord, releasing all keys afterwards (e.g. [ctrl,a] or [enter]); presses repeats it, rechecking foreground and cancellation each time. Unknown keys fail before focus changes. Verify the focused control before input.",
     "inputSchema": {
       "type": "object",
@@ -723,6 +1727,23 @@
       ],
       "additionalProperties": false
     },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "keys_sent": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Keys pressed together."
+        },
+        "presses": {
+          "type": "integer",
+          "description": "Times the combination was pressed."
+        }
+      },
+      "additionalProperties": true
+    },
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": true,
@@ -732,6 +1753,7 @@
   },
   {
     "name": "screensaver",
+    "title": "Screensaver Control",
     "description": "Read screensaver status, pause auto-start, resume or stop an active .scr saver. Pause restores on timer, resume or MCP disconnection. Does not unlock Windows or change password/lock policy.",
     "inputSchema": {
       "type": "object",
@@ -756,6 +1778,33 @@
         "action"
       ],
       "additionalProperties": false
+    },
+    "outputSchema": {
+      "type": "object",
+      "description": "For pause: {paused, seconds, restore}; otherwise {action, status_text}.",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "status, resume or stop."
+        },
+        "status_text": {
+          "type": "string",
+          "description": "Human-readable screensaver status."
+        },
+        "paused": {
+          "type": "boolean",
+          "description": "Present for pause: true when the managed pause started."
+        },
+        "seconds": {
+          "type": "integer",
+          "description": "Pause length."
+        },
+        "restore": {
+          "type": "string",
+          "description": "When settings are restored."
+        }
+      },
+      "additionalProperties": true
     },
     "annotations": {
       "readOnlyHint": false,
