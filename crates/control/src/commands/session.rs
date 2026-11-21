@@ -385,7 +385,7 @@ fn print(facts: &Facts, findings: &[Finding]) {
 
 /// `session status [--json]`. Exits non-zero when a blocker exists so scripts
 /// can gate scheduled automation on it.
-pub(super) fn run(args: &[String]) -> Result<()> {
+pub(crate) fn run(args: &[String]) -> Result<()> {
     let json_output = match args {
         [] => false,
         [status] if status == "status" => false,

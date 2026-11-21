@@ -1,15 +1,13 @@
-use super::{
-    active, capture_region, desktop, display_command, locate_target, scaled_template,
-    screen_region, session, window_command,
-};
+use super::errors::describe;
+use super::input::{CaptureProof, drag_path, type_chunks};
+use crate::cli::{active, capture_region, locate_target, scaled_template, screen_region};
+use crate::commands::{display as display_command, session, window as window_command};
+use crate::desktop;
 use autogui::{
     AutoGui, Display, Error, FakeBackend, LocateOptions, MouseButton, Point, Rect, Result,
     Screenshot, Window,
 };
-#[path = "mcp_input.rs"]
-mod input;
 use base64::Engine;
-use input::{CaptureProof, drag_path, type_chunks};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -48,54 +46,6 @@ fn info(window: &Window) -> Result<Value> {
         "active":window.is_active()?,"minimized":window.is_minimized()?,"maximized":window.is_maximized()?}),
     )
 }
-/// Error text for agents: the original message plus a recovery hint.
-pub(crate) fn describe(error: &Error) -> String {
-    let message = error.to_string();
-    let hint = match error {
-        _ if message.contains("cancelled") => {
-            "request was cancelled or the client disconnected; no further input was sent"
-        }
-        Error::WindowNotFound => {
-            "the window closed or changed identity; re-run windows_list (or window_wait) for fresh targets"
-        }
-        Error::PermissionDenied(m) if m.contains("SetForegroundWindow") => {
-            "Windows foreground lock or an elevated (administrator) window refused focus; retry window_control activate, or use display_capture then click_at with display to click the window directly"
-        }
-        Error::PermissionDenied(m) if m.contains("foreground") => {
-            "another window took focus; re-run capture (which activates the target) before sending input"
-        }
-        Error::PermissionDenied(m) if m.contains("AUTOGUI_ALLOW_LAUNCH") => {
-            "the user must start the MCP server with AUTOGUI_ALLOW_LAUNCH=1 to allow app_launch"
-        }
-        Error::PermissionDenied(_) => {
-            "the target may be elevated or on a secure desktop; run the agent at the same integrity level"
-        }
-        Error::FailSafe(_) => {
-            "the cursor is on a primary-monitor corner (fail-safe); move it off the corner, then retry"
-        }
-        Error::ImageNotFound => {
-            "call capture to confirm the template is visible; check scale (DPI/zoom) and confidence, or use a more distinctive template"
-        }
-        Error::UnsupportedPlatform => "this tool works only on Windows",
-        Error::FeatureDisabled(_) => "install an autogui-control build with this feature enabled",
-        Error::Input(_) => {
-            "the input backend failed; run session_status to check for a locked, disconnected or secure desktop"
-        }
-        Error::Screenshot(_) => {
-            "screen capture failed; run session_status to check for a locked, disconnected or display-less session"
-        }
-        Error::Io(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-            "the window did not reach the state in time; raise timeout or check title/process with windows_list"
-        }
-        Error::InvalidArgument(_) | Error::Io(_) => "",
-    };
-    if hint.is_empty() {
-        message
-    } else {
-        format!("{message}. Hint: {hint}")
-    }
-}
-
 fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(|e| Error::Input(format!("invalid tool arguments: {e}")))
 }
@@ -296,7 +246,7 @@ fn pointer_call(name: &str, args: Value) -> Result<PointerCall> {
                 y: a.y,
                 action: PointerAction::Drag(
                     Point::new(0, 0), // replaced by the mapped destination
-                    input::button(a.button.as_deref())?,
+                    super::input::button(a.button.as_deref())?,
                     Duration::from_millis(duration),
                 ),
                 to: Some((a.to_x, a.to_y)),
@@ -314,7 +264,7 @@ fn pointer_call(name: &str, args: Value) -> Result<PointerCall> {
                 capture_id: a.capture_id,
                 x: a.x,
                 y: a.y,
-                action: PointerAction::Click(input::button(a.button.as_deref())?, clicks),
+                action: PointerAction::Click(super::input::button(a.button.as_deref())?, clicks),
                 to: None,
             }
         }
@@ -388,7 +338,7 @@ struct Saver {
 }
 
 #[derive(Default)]
-pub(crate) struct Session {
+pub struct Session {
     gui: Option<AutoGui>,
     targets: HashMap<String, Window>,
     generation: u64,
@@ -467,7 +417,7 @@ impl Session {
         display.validate()?;
         Ok(display.clone())
     }
-    pub(crate) fn call(
+    pub fn call(
         &mut self,
         name: &str,
         args: Value,
@@ -977,7 +927,7 @@ impl Session {
     }
 }
 
-impl super::mcp::Handler for Session {
+impl autogui_protocol::server::Handler for Session {
     fn call(
         &mut self,
         name: &str,

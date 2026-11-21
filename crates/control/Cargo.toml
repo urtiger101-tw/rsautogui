@@ -1,0 +1,23 @@
+[package]
+name = "autogui-control-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Windows CLI and MCP tool logic behind autogui-control"
+
+[features]
+default = ["agent", "os", "opencv"]
+agent = ["autogui/agent"]
+os = ["autogui/os"]
+opencv = ["autogui/opencv"]
+
+[dependencies]
+autogui = { path = "../..", default-features = false, features = ["locate"] }
+autogui-protocol = { path = "../protocol" }
+image = "0.25.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Security", "Win32_Security_Authentication_Identity", "Win32_System_Console", "Win32_System_Power", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading"] }

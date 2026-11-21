@@ -1,6 +1,6 @@
 use autogui::{AutoGui, Display, Error, Result, Window};
 
-pub(super) fn select(name: &str) -> Result<Display> {
+pub(crate) fn select(name: &str) -> Result<Display> {
     Display::all()?
         .into_iter()
         .find(|display| display.name() == name)
@@ -9,7 +9,7 @@ pub(super) fn select(name: &str) -> Result<Display> {
         ))
 }
 
-pub(super) fn move_window(
+pub(crate) fn move_window(
     window: &Window,
     display: &Display,
     check: &dyn Fn() -> Result<()>,
@@ -53,7 +53,7 @@ pub(super) fn move_window(
     Ok(())
 }
 
-pub(super) fn run(args: &[String]) -> Result<()> {
+pub(crate) fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("list") if args.len() == 1 => {
             for display in Display::all()? {
@@ -83,7 +83,7 @@ pub(super) fn run(args: &[String]) -> Result<()> {
         Some("move") if args.len() == 3 => {
             let display = select(&args[1])?;
             let mut gui = AutoGui::new()?;
-            let window = super::unique_window(&mut gui, &args[2])?;
+            let window = crate::cli::unique_window(&mut gui, &args[2])?;
             let previous = window.box_rect()?;
             move_window(&window, &display, &|| Ok(()))?;
             println!(

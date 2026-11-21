@@ -9,31 +9,10 @@ use std::sync::{
     mpsc,
 };
 
-pub(crate) const NAMES: &[&str] = &[
-    "session_status",
-    "displays_list",
-    "display_capture",
-    "window_to_display",
-    "windows_list",
-    "window_control",
-    "capture",
-    "locate",
-    "click_image",
-    "click_at",
-    "pointer_move",
-    "drag",
-    "scroll",
-    "cursor_position",
-    "window_wait",
-    "app_launch",
-    "type_text",
-    "hotkey",
-    "screensaver",
-];
-pub(crate) fn definitions() -> Value {
-    serde_json::from_str(include_str!("mcp_tools.json")).expect("embedded tool schema")
-}
-pub(crate) trait Handler {
+use crate::tools::{NAMES, definitions};
+
+/// Executes one validated `tools/call` request.
+pub trait Handler {
     fn call(&mut self, name: &str, args: Value, check: &dyn Fn() -> Result<()>) -> Result<Value>;
 }
 
@@ -213,7 +192,8 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
     }
 }
 
-pub(crate) fn run(handler: impl Handler) -> Result<()> {
+/// Serves MCP over stdin/stdout until EOF.
+pub fn run(handler: impl Handler) -> Result<()> {
     let interrupts = Arc::new(Interrupts::default());
     let reader_state = interrupts.clone();
     let output = Arc::new(Mutex::new(std::io::stdout()));

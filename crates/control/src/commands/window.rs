@@ -1,6 +1,7 @@
-use super::{AutoGui, Error, Window, unique_window};
+use crate::cli::unique_window;
+use autogui::{AutoGui, Error, Window};
 
-pub(super) fn apply(
+pub(crate) fn apply(
     window: &Window,
     action: &str,
     pair: Option<(i32, i32)>,
@@ -34,7 +35,7 @@ pub(super) fn apply(
     }
 }
 
-pub(super) fn run(args: &[String]) -> autogui::Result<()> {
+pub(crate) fn run(args: &[String]) -> autogui::Result<()> {
     if args.len() != 2 && args.len() != 4 {
         return Err(Error::InvalidArgument(
             "window <action> <unique title> [x y|width height]",

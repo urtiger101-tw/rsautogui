@@ -57,7 +57,7 @@ New-Item -ItemType Directory -Path (Join-Path $OutputDir 'scripts') | Out-Null
 foreach ($name in @('virtual-display.ps1','rdp-to-console.ps1')) {
     Copy-Item -LiteralPath (Join-Path $repo "scripts\$name") -Destination (Join-Path $OutputDir 'scripts')
 }
-Copy-Item -LiteralPath (Join-Path $repo 'examples\support\mcp_tools.json') -Destination (Join-Path $OutputDir 'docs\mcp-tools.json')
+Copy-Item -LiteralPath (Join-Path $repo 'crates\protocol\src\tools.json') -Destination (Join-Path $OutputDir 'docs\mcp-tools.json')
 Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $OutputDir
 $files = @(Get-ChildItem -LiteralPath $OutputDir -Recurse -File | ForEach-Object {
     @{path=$_.FullName.Substring($OutputDir.Length + 1);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash;bytes=$_.Length}
