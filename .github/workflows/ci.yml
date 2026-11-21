@@ -9,9 +9,10 @@ on:
 permissions:
   contents: read
 
+# Superseded pull-request runs are cancelled; every push to main runs to the end.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,6 +38,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      # The library without OS backends, as the Linux job tests it; --all-targets
+      # also lints examples and the control crate they pull in (dev-dependency).
+      - name: Clippy (no default features)
+        run: cargo clippy -p autogui --no-default-features --all-targets --locked -- -D warnings
+
       # Live tests that move the real mouse/keyboard are #[ignore]d and need
       # AUTOGUI_LIVE=1; they never run here.
       - name: Test
@@ -57,19 +63,26 @@ jobs:
 
   linux:
     name: Linux (compile check)
-    runs-on: ubuntu-latest
-    # SPEC: non-Windows targets must compile. System libraries for xcap and
-    # enigo are a best guess, so this job reports without blocking.
+    # Pinned image: the apt package names below are those of Ubuntu 24.04.
+    runs-on: ubuntu-24.04
+    # SPEC: non-Windows targets must compile. Linux is not a supported runtime
+    # target yet, so this job reports without blocking.
     continue-on-error: true
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
+      # Build headers for xcap (X11/xcb, Wayland, PipeWire, D-Bus, EGL/GBM) and
+      # enigo (libxdo). Installed with --no-upgrade so the image's preinstalled
+      # versions stay as they are; a missing name fails this step loudly.
       - name: System libraries (xcap, enigo)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get install -y --no-install-recommends --no-upgrade \
             pkg-config clang libclang-dev \
+            libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev \
+            libwayland-dev libegl-dev libgbm-dev libxdo-dev
+          dpkg-query -W -f='${Package} ${Version}\n' \
             libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev \
             libwayland-dev libegl-dev libgbm-dev libxdo-dev
 
