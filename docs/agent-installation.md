@@ -54,7 +54,7 @@ Codex 的 MCP 安裝需要本機 Codex CLI；其餘宿主只寫設定檔。JSONC
 
 解除安裝：使用「應用程式」中的 AutoGui，或執行 `%LOCALAPPDATA%\Programs\AutoGui.setup\unins000.exe /VERYSILENT`。只移除仍與安裝時雜湊相符的檔案、還原 MCP 設定；使用者修改過的檔案與 `AutoGui.recovery-*` 備份會保留並提示。
 
-Codex MCP 註冊需要 `codex` 在 PATH 上（`codex mcp add`）。`install.cmd` 與 zip 路徑仍可使用，行為相同。
+Codex MCP 註冊使用已安裝的 codex CLI（`codex mcp add`）。安裝程式依序嘗試目前 PATH、系統與使用者 PATH、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`，採用第一個能讀出設定的 CLI，因此無法執行的啟動 shim 會被略過；也可用 `install.ps1 -CodexPath <codex.exe>` 指定。找不到可用的 CLI、`mcp add` 失敗或 Codex 已有 `autogui` 項目時，只略過 Codex，其餘照常安裝並顯示提示，提示中附有之後手動註冊的指令。`install.cmd` 與 zip 路徑仍可使用，行為相同。
 
 建置安裝程式（需要 Inno Setup 6）：
 

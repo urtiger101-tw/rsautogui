@@ -171,4 +171,40 @@ $newConfig=Join-Path $newProfile 'AppData\Roaming\Claude\claude_desktop_config.j
 Assert ((Get-Content -LiteralPath $newConfig -Raw | ConvertFrom-Json).mcpServers.autogui.args[0] -eq 'mcp') 'Missing Claude Desktop config was not created'
 &(Join-Path $newInstall 'uninstall.ps1')
 Assert (-not (Test-Path -LiteralPath $newConfig)) 'Uninstall left a Claude Desktop config it created'
-Write-Host "PASS installer: all four hosts, claude-desktop MCP (isolated AppData, preview, byte-exact restore, created-config removal, Skill rejection), JSONC preservation, byte-exact empty/whitespace backups and restoration, shared/legacy/custom AGY Skill roots, program-only, collision, isolated root $fixture"
+# Codex is optional: a codex CLI that fails (for example a launcher shim) skips only Codex.
+# The fake CLI lists an empty config but fails 'mcp add' without writing anything.
+$fakeCodex=Join-Path $fixture 'fake-codex\codex.cmd'
+New-Item -ItemType Directory -Path (Split-Path -Parent $fakeCodex) -Force | Out-Null
+[IO.File]::WriteAllText($fakeCodex,"@echo off`r`nif `"%2`"==`"list`" (echo [] & exit /b 0)`r`nexit /b 1`r`n",(New-Object System.Text.ASCIIEncoding))
+$brokenCodex=Join-Path $fixture 'fake-codex\broken.cmd'
+[IO.File]::WriteAllText($brokenCodex,"@exit /b 1`r`n",(New-Object System.Text.ASCIIEncoding))
+foreach($case in @(@{Name='no-cli';Cli=$brokenCodex;Pattern='no working codex CLI'},@{Name='add-fails';Cli=$fakeCodex;Pattern='mcp add'' failed'})) {
+    $codexProfile=Join-Path $fixture ("profile-codex-"+$case.Name)
+    $codexInstall=Join-Path $fixture ("program-codex-"+$case.Name)
+    $codexToml=Join-Path $codexProfile '.codex\config.toml'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $codexToml) -Force | Out-Null
+    [IO.File]::WriteAllText($codexToml,"model = 'kept'`n",$utf8)
+    $warningFile=Join-Path $fixture ("warnings-"+$case.Name+".txt")
+    &(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $codexProfile -InstallDir $codexInstall -McpHosts codex,claude -CodexPath $case.Cli -WarningFile $warningFile -NonInteractive 3>$null
+    Assert ((Get-Content -LiteralPath (Join-Path $codexProfile '.claude.json') -Raw | ConvertFrom-Json).mcpServers.autogui.args[0] -eq 'mcp') "Codex $($case.Name) blocked Claude registration"
+    Assert ([IO.File]::ReadAllText($codexToml) -ceq "model = 'kept'`n") "Codex $($case.Name) changed config.toml"
+    Assert ((Test-Path -LiteralPath $warningFile) -and ([IO.File]::ReadAllText($warningFile) -match $case.Pattern)) "Codex $($case.Name) warning missing"
+    $codexManifest=Get-Content -LiteralPath (Join-Path $codexInstall '.install\manifest.json') -Raw | ConvertFrom-Json
+    Assert (@($codexManifest.mcp_hosts) -notcontains 'codex') "Codex $($case.Name) recorded as configured"
+    Assert (-not (Test-Path -LiteralPath (Join-Path $codexInstall '.install\backups\codex.original'))) "Codex $($case.Name) left a backup"
+    &(Join-Path $codexInstall 'uninstall.ps1')
+    Assert ([IO.File]::ReadAllText($codexToml) -ceq "model = 'kept'`n") "Codex $($case.Name) uninstall changed config.toml"
+}
+# Fallback order: a codex on PATH that cannot run is skipped for the next candidate.
+$shimDir=Join-Path $fixture 'fake-codex\shim'
+$realDir=Join-Path $fixture 'fake-codex\real'
+New-Item -ItemType Directory -Path $shimDir,$realDir -Force | Out-Null
+Copy-Item -LiteralPath $brokenCodex -Destination (Join-Path $shimDir 'codex.cmd')
+Copy-Item -LiteralPath $fakeCodex -Destination (Join-Path $realDir 'codex.cmd')
+$savedPath=$env:Path
+try {
+    $env:Path="$shimDir;$realDir;$savedPath"
+    $previewText=(&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory (Join-Path $fixture 'profile-codex-order') -InstallDir (Join-Path $fixture 'program-codex-order') -McpHosts codex -NonInteractive -Preview 6>&1 3>$null | Out-String)
+} finally { $env:Path=$savedPath }
+Assert ($previewText -match [regex]::Escape("Codex CLI: $(Join-Path $realDir 'codex.cmd')")) 'Broken codex on PATH was not skipped'
+Write-Host "PASS installer: all four hosts, claude-desktop MCP (isolated AppData, preview, byte-exact restore, created-config removal, Skill rejection), JSONC preservation, byte-exact empty/whitespace backups and restoration, shared/legacy/custom AGY Skill roots, optional Codex (broken CLI, failed add, PATH fallback), program-only, collision, isolated root $fixture"
