@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+## 0.2.0 — 2026-11-21
+
+### Highlights
+
+- Agents get structured results: MCP tools carry titles and `outputSchema`, return `structuredContent` on protocol 2025-06-18 and later, and report failures as `{code, message, hint, retryable}`.
+- `autogui-control doctor` checks the installation, runtime DLL, session and agent-host registrations without sending input.
+- `autogui-control mcp tools` exports tool schemas for Anthropic and OpenAI APIs, and `mcp config` prints registration snippets for six hosts.
+- Recognition is much faster: 1080p confidence matching is 7–10× faster, and MCP screenshots are about 3× faster and 43% smaller.
+- CLI failures use specific exit codes instead of always 1 (see Changed).
+
+### Added
+
+- CLI: `doctor [--json]` (also `--doctor`); `mcp tools [--format mcp|anthropic|openai|openai-chat]`; `mcp config --host claude-code|claude-desktop|codex|openai-agents|opencode|agy`; `-V/--version [--json]`; global `--json`, `--quiet`, `--no-color` (and `NO_COLOR`), `--lang en|zh` (and `AUTOGUI_LANG`, then the Windows UI language).
+- CLI help is bilingual (English and Traditional Chinese) via `help <command>` or `<command> --help`, with "did you mean" suggestions for mistyped commands.
+- MCP: tool `title` and `outputSchema`; `structuredContent` alongside the JSON text block (the text block is always kept); structured errors with the codes `invalid_argument`, `window_not_found`, `image_not_found`, `not_found`, `fail_safe`, `permission_denied`, `timeout`, `cancelled`, `unsupported`, `input_failed`, `capture_failed`, `runtime_unavailable` and `internal`; `serverInfo.title`; the `logging` capability with `logging/setLevel`; screensaver lease notifications through `notifications/message`; empty `resources/list`, `resources/templates/list` and `prompts/list`.
+- Library: `autogui::prelude` for common imports; `From<Rect>` for `(i32, i32, i32, i32)`.
+- Installer: `claude-desktop` MCP host (`%APPDATA%\Claude\claude_desktop_config.json`, key `mcpServers.autogui`) in `install.ps1`, and the Inno Setup task `mcp\claude-desktop`. It is MCP-only.
+- Packaging: `scripts/package.ps1` fails when the five workspace manifests have different versions, and ships `docs/performance.md`.
+
+### Changed
+
+- **Exit codes.** Failures no longer always exit 1. `0` ok, `1` operation failed, `2` usage error, `3` window or image not found, `4` timeout, `5` environment blocked (including `PermissionDenied`, for example lost focus, and a failed `doctor`), `6` fail-safe triggered, `70` internal error. Scripts that test for `1` should test for non-zero or the specific code.
+- CLI `type` sends text in batches of at most 32 characters and checks foreground and cancellation before each batch. Text that starts with `--` must follow `--`: `autogui-control type Notepad -- --json`.
+- MCP `structuredContent` is returned only when the negotiated protocol version is 2025-06-18 or later; older clients keep receiving the text block only.
+- Library: `AutoGui` window getters take `&self`.
+
+### Performance
+
+Median times in milliseconds for a 1920×1080 RGB or grayscale image with an 80×40 template, before and after this release (details and method in [docs/performance.md](docs/performance.md)):
+
+| Search | Before | 0.2.0 |
+|---|---|---|
+| Exact, RGB noise / UI | 3.00 / 6.37 | 0.88 / 0.86 |
+| Exact, grayscale | 3.88 / 10.28 | 1.51 / 1.60 |
+| Confidence 0.999, RGB | 248.5 | 25.1 |
+| Confidence 0.9, grayscale | 118.8 | 16.1 |
+| Confidence 0.95, RGB UI | 246.8 | 25.4 |
+| Region 280×160 (exact) | 4.04 | 4.24 (within noise) |
+
+- Peak memory for a full-HD confidence search fell from about 113 MB to about 2.5 MB per worker. Searches use up to 8 threads and poll the fail-safe between work items.
+- MCP `capture` PNG at 1080p: 80–102 ms → 27–31 ms, and 1.22 MB → 0.69 MB.
+- PNG codec crates build at opt-level 3, making display capture to PNG about 15% faster for about 150 KiB more runtime DLL (5370 → 5560 KiB).
+- `--help` cold start is about 4.9 ms; MCP `initialize` plus `tools/list`, including process spawn, is about 15 ms.
+
+### Internal
+
+- CLI and MCP logic moved into `crates/protocol` (`autogui-protocol`: MCP stdio protocol, tool catalogue `tools.json`, config snippets and export) and `crates/control` (`autogui-control-core`). The runtime DLL and the `autogui-control` launcher are thin wrappers. The C exports, CLI commands and 19 MCP tools are unchanged.
+- `src/gui.rs` split into `mouse`, `keyboard` and `screen` modules (SPEC §9); Win32 window code moved to `window_win.rs`.
+- Integration tests `tests/tween_failsafe.rs`, `tests/locate_synthetic.rs` and `tests/keys.rs`.
+- CI (`.github/workflows/ci.yml`): Windows gates (fmt, clippy, tests, release build), the MCP protocol test (`tests/mcp-protocol.ps1`), and a non-blocking Linux compile check.
+- `scripts/bench.ps1` (`-Json` for machine-readable output); `recognition_bench` accepts `--iterations`, `--json` and `--capture`.
+- Tool catalogue is `crates/protocol/src/tools.json`; the packaged `docs\mcp-tools.json` is unchanged.
+
+### Earlier unreleased changes
+
 - Added MCP `pointer_move`, `drag` and `cursor_position`, and `click_at` accepts `button` (left/right/middle) and `clicks` (1-3). Pointer actions reuse the latest single-use capture proof and its pre-input checks.
 - Added MCP `window_wait` (present/absent/foreground, timeout up to 30 s) and `app_launch`. `app_launch` is disabled unless the MCP process sets `AUTOGUI_ALLOW_LAUNCH=1`, and accepts only an existing absolute `.exe`.
 - `display_capture` returns a `capture_id`, so screen-level pointer actions can use a display proof; pointer tools take exactly one of `target` or `display`.

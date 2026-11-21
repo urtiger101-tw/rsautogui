@@ -139,4 +139,36 @@ foreach($case in @(
     Assert (-not (Test-Path -LiteralPath (Join-Path $overrideSkill 'SKILL.md'))) "AGY $($case.Name) Skill was not removed"
     Assert ([IO.File]::ReadAllText($unrelatedSkill) -ceq 'fixture: preserve this skill') 'Unrelated override Skill changed'
 }
-Write-Host "PASS installer: all four hosts, JSONC preservation, byte-exact empty/whitespace backups and restoration, shared/legacy/custom AGY Skill roots, program-only, collision, isolated root $fixture"
+# Claude Desktop is MCP-only. Its config path derives from the isolated profile (AppData\Roaming),
+# never from the real %APPDATA%; the fixture asserts that before any write.
+$desktopProfile=Join-Path $fixture 'profile-claude-desktop'
+$desktopInstall=Join-Path $fixture 'program-claude-desktop'
+$desktopConfig=Join-Path $desktopProfile 'AppData\Roaming\Claude\claude_desktop_config.json'
+Assert (-not ($env:APPDATA -and $desktopConfig.StartsWith($env:APPDATA,[StringComparison]::OrdinalIgnoreCase))) 'Claude Desktop fixture points at the real APPDATA'
+$desktopOriginal='{"preferences":{"keep":true},"mcpServers":{"fixture":{"command":"unused"}}}'
+New-Item -ItemType Directory -Path (Split-Path -Parent $desktopConfig) -Force | Out-Null
+[IO.File]::WriteAllText($desktopConfig,$desktopOriginal,$utf8)
+$failed=$false
+try { &(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $desktopProfile -InstallDir (Join-Path $fixture 'desktop-rejected') -SkillHosts claude-desktop -NonInteractive } catch { $failed=$true }
+Assert $failed 'Claude Desktop accepted as a Skill host'
+Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'desktop-rejected'))) 'Rejected Skill host left files'
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $desktopProfile -InstallDir $desktopInstall -McpHosts claude-desktop -NonInteractive -Preview
+Assert (-not (Test-Path -LiteralPath $desktopInstall)) 'Preview wrote Claude Desktop installation files'
+Assert ([IO.File]::ReadAllText($desktopConfig) -ceq $desktopOriginal) 'Preview changed Claude Desktop config'
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $desktopProfile -InstallDir $desktopInstall -McpHosts claude-desktop -NonInteractive
+$desk=Get-Content -LiteralPath $desktopConfig -Raw | ConvertFrom-Json
+Assert ($desk.preferences.keep -eq $true -and $desk.mcpServers.fixture.command -eq 'unused') 'Unrelated Claude Desktop config lost'
+Assert ($desk.mcpServers.autogui.command -eq (Join-Path $desktopInstall 'autogui-control.exe') -and $desk.mcpServers.autogui.args[0] -eq 'mcp') 'Claude Desktop MCP definition wrong'
+Assert (-not (Test-Path -LiteralPath (Join-Path $desktopProfile '.claude'))) 'Claude Desktop install wrote Claude Code roots'
+&(Join-Path $desktopInstall 'uninstall.ps1')
+Assert ([IO.File]::ReadAllText($desktopConfig) -ceq $desktopOriginal) 'Uninstall did not restore Claude Desktop config bytes'
+Assert (-not (Test-Path -LiteralPath (Join-Path $desktopInstall 'autogui-control.exe'))) 'Claude Desktop uninstall left the program'
+# A missing config is created by install and removed by uninstall.
+$newProfile=Join-Path $fixture 'profile-claude-desktop-new'
+$newInstall=Join-Path $fixture 'program-claude-desktop-new'
+$newConfig=Join-Path $newProfile 'AppData\Roaming\Claude\claude_desktop_config.json'
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $newProfile -InstallDir $newInstall -McpHosts claude-desktop -NonInteractive
+Assert ((Get-Content -LiteralPath $newConfig -Raw | ConvertFrom-Json).mcpServers.autogui.args[0] -eq 'mcp') 'Missing Claude Desktop config was not created'
+&(Join-Path $newInstall 'uninstall.ps1')
+Assert (-not (Test-Path -LiteralPath $newConfig)) 'Uninstall left a Claude Desktop config it created'
+Write-Host "PASS installer: all four hosts, claude-desktop MCP (isolated AppData, preview, byte-exact restore, created-config removal, Skill rejection), JSONC preservation, byte-exact empty/whitespace backups and restoration, shared/legacy/custom AGY Skill roots, program-only, collision, isolated root $fixture"

@@ -1,16 +1,16 @@
 # 畫面辨識與 Windows App 控制
 
-本專案提供 Rust library 和 `app_control` 命令列範例。控制目標需要在選定螢幕可見，並且 Windows 已登入、解除鎖定。預設主螢幕；`capture/locate/click` 可在最後加 `--display <完整裝置名稱>`，詳見 [虛擬與實體顯示器](virtual-display.md)。標題查詢會使用不分大小寫的子字串；符合多個視窗時會列出候選並停止。
+本專案提供 Rust library 和 `autogui-control` 命令列範例。控制目標需要在選定螢幕可見，並且 Windows 已登入、解除鎖定。預設主螢幕；`capture/locate/click` 可在最後加 `--display <完整裝置名稱>`，詳見 [虛擬與實體顯示器](virtual-display.md)。標題查詢會使用不分大小寫的子字串；符合多個視窗時會列出候選並停止。
 
-螢幕保護程式阻擋桌面時，可先使用 `app_control screensaver stop`。自動化期間可另開終端執行 `app_control screensaver pause 900` 暫停自動啟動；完整說明見 [螢幕保護程式控制](screensaver.md)。
+螢幕保護程式阻擋桌面時，可先使用 `autogui-control screensaver stop`。自動化期間可另開終端執行 `autogui-control screensaver pause 900` 暫停自動啟動；完整說明見 [螢幕保護程式控制](screensaver.md)。
 
 ## 建置與使用
 
 在 clone 後的 repository 根目錄執行：
 
 ```powershell
-cargo build --release --features opencv --example app_control
-$control = '.\target\release\examples\app_control.exe'
+cargo build --release --workspace --locked
+$control = '.\target\release\autogui-control.exe'
 & $control --help
 & $control list
 & $control capture '目標視窗標題' window.png
@@ -50,13 +50,13 @@ screenshot.save("button.png")?;
 - 純色模板沒有可用的相關變異數，因此改用 `1 - RMSE / 255` 比較顏色距離。
 - `grayscale`：只比亮度，會失去顏色區別；亮色運算已修正為不溢位。
 - `region`：只擷取並搜尋指定範圍，結果仍回傳主螢幕絕對座標。範圍超出主螢幕會裁切；模板比有效範圍大會回傳 `InvalidArgument`。
-- 多個重疊框依 SPEC 以 IoU > 0.3 抑制；`app_control` 若最後仍有多個候選，會停止並要求更具辨識性的模板。
+- 多個重疊框依 SPEC 以 IoU > 0.3 抑制；`autogui-control` 若最後仍有多個候選，會停止並要求更具辨識性的模板。
 
 大範圍搜尋建議使用 Release 建置與視窗範圍。FFT 需要與搜尋畫面大小相關的額外記憶體；低門檻或大量重複圖樣會產生更多候選，增加複核成本。
 
 ## 操作可靠性
 
-`app_control` 先選出唯一視窗，還原最小化狀態並確認前景，再在該視窗的可見範圍找圖。點擊前會重新擷取候選區域、複核圖樣、視窗位置與前景狀態。文字輸入會逐字確認前景視窗。Windows 的全域輸入無法與截圖形成原子操作；最後一次檢查和送出輸入之間，仍可能有使用者或 App 改變畫面，因此此工具不保證對快速移動或瞬間切換的 UI 零誤差。
+`autogui-control` 先選出唯一視窗，還原最小化狀態並確認前景，再在該視窗的可見範圍找圖。點擊前會重新擷取候選區域、複核圖樣、視窗位置與前景狀態。文字輸入會逐字確認前景視窗。Windows 的全域輸入無法與截圖形成原子操作；最後一次檢查和送出輸入之間，仍可能有使用者或 App 改變畫面，因此此工具不保證對快速移動或瞬間切換的 UI 零誤差。
 
 **預設 fail-safe 開啟。把游標移到主螢幕任一角落可中止長時間搜尋、拖曳或重複輸入。** 放開按鍵與滑鼠的清理仍會執行，以免殘留按住狀態。
 
@@ -97,7 +97,7 @@ target／capture_id 必須取自當次連線的真實回應；`x/y` 是 PNG 左�
 - `hotkey` 可加 `presses`（1–50）；未知按鍵名稱會在啟用視窗前就被拒絕。
 - `app_launch {path,args?,cwd?,wait_title?,timeout?}`：只接受本機磁碟機絕對路徑的 `.exe`（不接受 UNC／裝置路徑；不經 shell；拒絕 `.cmd`／`.bat`／`.ps1`／`.lnk`，最多 32 個參數），**預設停用**，須在 MCP 伺服器環境設定 `AUTOGUI_ALLOW_LAUNCH=1`，否則回傳 `PermissionDenied`。回傳 pid；指定 `wait_title` 時會等待視窗並回傳 target。
 
-CLI 對應：`app_control list [標題] [--process 名稱] [--foreground]`、`app_control wait <標題> [present|absent|foreground] [秒] [--process 名稱]`。錯誤訊息附帶復原建議。
+CLI 對應：`autogui-control list [標題] [--process 名稱] [--foreground]`、`autogui-control wait <標題> [present|absent|foreground] [秒] [--process 名稱]`。錯誤訊息附帶復原建議。
 
 送出事件前檢查原 target 身分、前景、視窗／顯示器幾何、游標、取消訊號及座標周圍最多 32×32 像素，移鼠後再檢查。hover／動畫導致像素變動時會拒絕；游標可能已移到目的地，重新擷取後再判斷。此局部比對無法偵測範圍外的語意變化，也無法消除最後檢查至系統輸入間的狀態變動；每次操作後仍須截圖確認。
 
@@ -116,9 +116,9 @@ cargo run --release --features opencv --example recognition_bench -- --full-hd
 真實互動測試會建立自己專用的 Win32 視窗，用按鈕收到的事件及輸入框讀回的文字驗收，並在結束時關閉該測試視窗：
 
 ```powershell
-cargo build --features opencv --example app_control
+cargo build --workspace
 $env:AUTOGUI_LIVE = '1'
-$env:AUTOGUI_CONTROL_EXE = (Resolve-Path .\target\debug\examples\app_control.exe).Path
+$env:AUTOGUI_CONTROL_EXE = (Resolve-Path .\target\debug\autogui-control.exe).Path
 $env:AUTOGUI_EVIDENCE_DIR = (Join-Path (Get-Location) '.agent\live-evidence')
 cargo test --all-features --test live_app_control -- --ignored --nocapture
 ```

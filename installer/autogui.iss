@@ -53,6 +53,7 @@ Name: "skill\agy"; Description: "AGY App / CLI"; Flags: unchecked
 Name: "mcp"; Description: "Register MCP server for:"; Flags: unchecked
 Name: "mcp\codex"; Description: "Codex"; Flags: unchecked
 Name: "mcp\claude"; Description: "Claude Code"; Flags: unchecked
+Name: "mcp\claude-desktop"; Description: "Claude Desktop"; Flags: unchecked
 Name: "mcp\opencode"; Description: "OpenCode"; Flags: unchecked
 Name: "mcp\agy"; Description: "AGY App / CLI"; Flags: unchecked
 
@@ -92,6 +93,8 @@ begin
   Result := '';
   AddHost(Result, Group, 'codex');
   AddHost(Result, Group, 'claude');
+  // Claude Desktop reads MCP servers only; it has no Skill task.
+  if Group = 'mcp' then AddHost(Result, Group, 'claude-desktop');
   AddHost(Result, Group, 'opencode');
   AddHost(Result, Group, 'agy');
 end;

@@ -42,6 +42,15 @@ Windows window tests must compile on all targets but only execute on `cfg(window
 
 See SPEC.md §8.
 
+## Workspace layout (0.2.0)
+
+- `src/`: the `autogui` library (mouse, keyboard, screen, locate, Win32 `window_win.rs`).
+- `runtime/`: `autogui_runtime.dll`, a thin C-export wrapper loaded on demand by the launcher.
+- `launcher/`: `autogui-control.exe`, which handles help, `doctor` and the MCP stdio entry point without loading the DLL.
+- `crates/protocol/` (`autogui-protocol`): MCP stdio protocol, `tools.json`, host config snippets and tool export.
+- `crates/control/` (`autogui-control-core`): CLI and MCP tool logic.
+- `installer/`, `scripts/`, `docs/`, `skills/`: packaging, user documentation and the agent Skill.
+
 ## Definition of done
 
 A feature is done only when:

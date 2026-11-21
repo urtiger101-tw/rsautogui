@@ -8,6 +8,9 @@
 /.opencode/
 /GROK_BUILD_PROMPT.md
 
+# Claude Code worktrees
+/.claude/worktrees/
+
 # Machine-local configuration and credentials
 .env
 .env.*
