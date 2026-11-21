@@ -9,6 +9,7 @@ param(
     [string]$CodexHome,
     [string]$OpenCodeHome,
     [string]$ClaudeConfig,
+    [string]$ClaudeDesktopConfig,
     [string]$AgyConfig,
     [string]$AgySkillRoot,
     [switch]$NonInteractive,
@@ -26,14 +27,18 @@ function Hosts([string[]]$Items) {
 }
 if (-not $NonInteractive -and -not $PSBoundParameters.ContainsKey('SkillHosts') -and -not $PSBoundParameters.ContainsKey('McpHosts')) {
     Write-Host 'AutoGui: EXE + on-demand DLL (all functionality included).'
-    Write-Host 'Hosts: codex, claude, opencode, agy. Blank = program only.'
+    Write-Host 'Skill hosts: codex, claude, opencode, agy. MCP hosts: codex, claude, claude-desktop, opencode, agy. Blank = program only.'
     $SkillHosts = @((Read-Host 'Install Skill for (comma separated)'))
     $McpHosts = @((Read-Host 'Register MCP for (comma separated)'))
 }
 $SkillHosts = @(Hosts $SkillHosts)
 $McpHosts = @(Hosts $McpHosts)
-foreach ($name in @($SkillHosts) + @($McpHosts)) {
-    if ($name -notin @('codex','claude','opencode','agy')) { throw "Unsupported host '$name'. Use -CustomSkillRoots for other agents." }
+foreach ($name in $SkillHosts) {
+    if ($name -eq 'claude-desktop') { throw 'Claude Desktop is MCP-only; use -McpHosts claude-desktop.' }
+    if ($name -notin @('codex','claude','opencode','agy')) { throw "Unsupported Skill host '$name'. Use -CustomSkillRoots for other agents." }
+}
+foreach ($name in $McpHosts) {
+    if ($name -notin @('codex','claude','claude-desktop','opencode','agy')) { throw "Unsupported MCP host '$name'. Use -CustomSkillRoots for other agents." }
 }
 $HomeDirectory = Full $HomeDirectory
 if (-not $InstallDir) {
@@ -44,6 +49,10 @@ $InstallDir = Full $InstallDir
 if (-not $CodexHome) { $CodexHome = if ($HomeDirectory -eq $env:USERPROFILE -and $env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HomeDirectory '.codex' } }
 if (-not $OpenCodeHome) { $OpenCodeHome = if ($HomeDirectory -eq $env:USERPROFILE -and $env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME 'opencode' } else { Join-Path $HomeDirectory '.config\opencode' } }
 if (-not $ClaudeConfig) { $ClaudeConfig = Join-Path $HomeDirectory '.claude.json' }
+if (-not $ClaudeDesktopConfig) {
+    $roaming = if ($HomeDirectory -eq $env:USERPROFILE) { $env:APPDATA } else { Join-Path $HomeDirectory 'AppData\Roaming' }
+    $ClaudeDesktopConfig = Join-Path $roaming 'Claude\claude_desktop_config.json'
+}
 if (-not $AgyConfig) { $AgyConfig = Join-Path $HomeDirectory '.gemini\config\mcp_config.json' }
 if (-not $AgySkillRoot) { $AgySkillRoot = Join-Path $HomeDirectory '.gemini\config\skills' }
 $roots = @{
@@ -54,7 +63,7 @@ $roots = @{
 }
 $openConfig = Join-Path $OpenCodeHome 'opencode.json'
 if (Test-Path -LiteralPath (Join-Path $OpenCodeHome 'opencode.jsonc')) { $openConfig = Join-Path $OpenCodeHome 'opencode.jsonc' }
-$configs = @{codex=(Join-Path $CodexHome 'config.toml'); claude=$ClaudeConfig; opencode=$openConfig; agy=$AgyConfig}
+$configs = @{codex=(Join-Path $CodexHome 'config.toml'); claude=$ClaudeConfig; 'claude-desktop'=$ClaudeDesktopConfig; opencode=$openConfig; agy=$AgyConfig}
 $exe = Join-Path $InstallDir 'autogui-control.exe'
 $manifestPath = Join-Path $InstallDir '.install\manifest.json'
 if (Test-Path -LiteralPath $manifestPath) { throw 'An AutoGui installation exists. Run its uninstall.ps1 first; modified files are preserved.' }
