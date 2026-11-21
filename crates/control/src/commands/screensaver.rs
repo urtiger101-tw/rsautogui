@@ -5,6 +5,7 @@ use autogui::{Error, Result};
 #[path = "screensaver_windows.rs"]
 mod platform;
 #[cfg(windows)]
+#[cfg_attr(not(feature = "agent"), allow(unused_imports))]
 pub(super) use platform::input_desktop;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -54,6 +55,159 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
     {
         let _ = command;
         Err(Error::UnsupportedPlatform)
+    }
+}
+
+/// User-facing messages, English or Traditional Chinese (pure, unit-tested).
+#[cfg(any(windows, test))]
+pub(super) mod text {
+    fn t(zh: bool, en: String, zhs: String) -> String {
+        if zh { zhs } else { en }
+    }
+    pub fn restore_failed(zh: bool, error: &str, journal: &str) -> String {
+        t(
+            zh,
+            format!(
+                "Restore failed: {error}; unlock, then run screensaver resume. Record: {journal}"
+            ),
+            format!("還原失敗：{error}；請解除鎖定後執行 screensaver resume。紀錄：{journal}"),
+        )
+    }
+    pub fn pause_started(zh: bool, seconds: u64, enabled: bool, journal: &str) -> [String; 2] {
+        [
+            t(
+                zh,
+                format!(
+                    "Screen saver auto-start paused; restores in {seconds} s. Press Ctrl+C, or run screensaver resume elsewhere, to restore early."
+                ),
+                format!(
+                    "已暫停螢幕保護程式自動啟動，{seconds} 秒後還原；Ctrl+C 或另開終端執行 screensaver resume 可提早還原。"
+                ),
+            ),
+            t(
+                zh,
+                format!("Originally enabled: {enabled}; recovery record: {journal}"),
+                format!("原本啟用：{enabled}；還原紀錄：{journal}"),
+            ),
+        ]
+    }
+    pub fn pause_finished(zh: bool) -> String {
+        t(
+            zh,
+            "Pause finished; original settings restored.".into(),
+            "暫停已結束，已完成原設定還原。".into(),
+        )
+    }
+    pub fn restored_from_record(zh: bool) -> String {
+        t(
+            zh,
+            "Original settings restored from the pause record.".into(),
+            "已依暫停紀錄還原原設定。".into(),
+        )
+    }
+    pub fn nothing_to_restore(zh: bool) -> String {
+        t(
+            zh,
+            "No pending pause record; any running pause has ended.".into(),
+            "目前沒有待還原的暫停紀錄；執行中的暫停已結束。".into(),
+        )
+    }
+    pub fn enabled(zh: bool, value: bool) -> String {
+        t(
+            zh,
+            format!("Screen saver enabled: {value}"),
+            format!("螢幕保護程式啟用：{value}"),
+        )
+    }
+    pub fn running(zh: bool, value: bool) -> String {
+        t(
+            zh,
+            format!("Running now: {value}"),
+            format!("目前執行中：{value}"),
+        )
+    }
+    pub fn timeout(zh: bool, seconds: u32) -> String {
+        t(
+            zh,
+            format!("Idle timeout (s): {seconds}"),
+            format!("閒置啟動秒數：{seconds}"),
+        )
+    }
+    pub fn secure(zh: bool, value: bool) -> String {
+        t(
+            zh,
+            format!("Sign-in required on resume: {value}"),
+            format!("恢復時需要登入：{value}"),
+        )
+    }
+    pub fn desktop(zh: bool, name: &Result<String, String>) -> String {
+        match name {
+            Ok(name) => t(
+                zh,
+                format!("Input desktop: {name}"),
+                format!("目前輸入桌面：{name}"),
+            ),
+            Err(e) => t(
+                zh,
+                format!("Input desktop: unreadable ({e})"),
+                format!("目前輸入桌面：無法讀取（{e}）"),
+            ),
+        }
+    }
+    /// `error` is the Windows error code when the cursor is unavailable.
+    pub fn cursor(zh: bool, error: Option<u32>) -> String {
+        match error {
+            Some(code) => t(
+                zh,
+                format!(
+                    "Desktop cursor access: unavailable (Windows error {code}); sign-in is still required if locked."
+                ),
+                format!("桌面游標存取：不可用（Windows 錯誤 {code}）；若已鎖定仍需登入。"),
+            ),
+            None => t(
+                zh,
+                "Desktop cursor access: available".into(),
+                "桌面游標存取：可用".into(),
+            ),
+        }
+    }
+    #[derive(Clone, Copy)]
+    pub enum Pause {
+        Running,
+        Pending,
+        Inactive,
+    }
+    pub fn pause_state(zh: bool, state: Pause) -> String {
+        let (en, zhs) = match state {
+            Pause::Running => ("Tool pause: running", "本工具暫停：執行中"),
+            Pause::Pending => (
+                "Tool pause: unfinished recovery record; run screensaver resume",
+                "本工具暫停：有未完成的還原紀錄，請執行 screensaver resume",
+            ),
+            Pause::Inactive => ("Tool pause: not active", "本工具暫停：未啟用"),
+        };
+        t(zh, en.into(), zhs.into())
+    }
+    pub fn none_running(zh: bool) -> String {
+        t(
+            zh,
+            "No screen saver is running.".into(),
+            "目前沒有正在執行的螢幕保護程式。".into(),
+        )
+    }
+    pub fn ended_by_itself(zh: bool) -> String {
+        t(
+            zh,
+            "The screen saver ended by itself.".into(),
+            "螢幕保護程式已自行結束。".into(),
+        )
+    }
+    pub fn stopped(zh: bool) -> String {
+        t(
+            zh,
+            "Screen saver stopped; the auto-start setting is unchanged.".into(),
+            "已停止目前的螢幕保護程式；自動啟動設定維持原值。".into(),
+        )
     }
 }
 
@@ -192,5 +346,36 @@ mod tests {
             },
             true
         ));
+    }
+
+    #[test]
+    fn english_messages_have_no_cjk() {
+        use text::*;
+        let cjk = |s: &str| s.chars().any(|c| c as u32 > 0x2e80);
+        let mut all = vec![
+            restore_failed(false, "e", "j"),
+            pause_finished(false),
+            restored_from_record(false),
+            nothing_to_restore(false),
+            enabled(false, true),
+            running(false, false),
+            timeout(false, 600),
+            secure(false, true),
+            desktop(false, &Ok("Default".into())),
+            desktop(false, &Err("x".into())),
+            cursor(false, None),
+            cursor(false, Some(5)),
+            none_running(false),
+            ended_by_itself(false),
+            stopped(false),
+        ];
+        all.extend(pause_started(false, 5, true, "j"));
+        for p in [Pause::Running, Pause::Pending, Pause::Inactive] {
+            all.push(pause_state(false, p));
+        }
+        for line in &all {
+            assert!(!cjk(line), "{line}");
+        }
+        assert!(cjk(&stopped(true)));
     }
 }

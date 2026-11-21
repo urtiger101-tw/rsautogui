@@ -270,6 +270,13 @@ const OPTIONS: &[(&str, Text)] = &[
         ),
     ),
     (
+        "--",
+        t(
+            "End of flags; the rest is literal text. Global flags work before the command (and after it, except for type)",
+            "旗標結束，其後為原文。全域旗標可放在命令前（type 以外亦可放後面）",
+        ),
+    ),
+    (
         "--lang en|zh",
         t(
             "Language (else AUTOGUI_LANG, then Windows UI)",
@@ -369,21 +376,30 @@ pub fn command_help(spec: &CommandSpec, lang: Lang) -> String {
     out
 }
 
+/// Optimal-string-alignment distance: an adjacent swap costs 1.
 fn distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut prev = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let next = (row[j + 1] + 1)
-                .min(row[j] + 1)
-                .min(prev + usize::from(ca != *cb));
-            prev = row[j + 1];
-            row[j + 1] = next;
+    let mut grid = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in grid.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in grid[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut best = (grid[i - 1][j] + 1)
+                .min(grid[i][j - 1] + 1)
+                .min(grid[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(grid[i - 2][j - 2] + 1);
+            }
+            grid[i][j] = best;
         }
     }
-    row[b.len()]
+    grid[a.len()][b.len()]
 }
 
 /// Closest known command within a small edit distance ("did you mean").
@@ -470,6 +486,8 @@ mod tests {
         assert_eq!(suggest("clik"), Some("click"));
         assert_eq!(suggest("sess"), Some("session"));
         assert_eq!(suggest("zzzzzz"), None);
+        assert_eq!(suggest("lsit"), Some("list"));
+        assert_eq!(suggest("wiat"), Some("wait"));
     }
 
     #[test]
