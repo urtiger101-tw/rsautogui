@@ -1,6 +1,6 @@
 //! Versioned C boundary: no Rust allocator or unwinding crosses the DLL boundary.
 use autogui_control_core as app;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::cell::RefCell;
 use std::ffi::c_void;
 
@@ -57,9 +57,7 @@ pub unsafe extern "C" fn autogui_call_json(
         });
         let value = match value {
             Ok(v) => v,
-            Err(e) => {
-                json!({"content":[{"type":"text","text":app::mcp::errors::describe(&e)}],"isError":true})
-            }
+            Err(e) => app::mcp::errors::result(&e),
         };
         let bytes = serde_json::to_vec(&value).map_err(std::io::Error::other)?;
         unsafe { reply(context, bytes.as_ptr(), bytes.len()) };

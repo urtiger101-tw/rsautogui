@@ -1,4 +1,4 @@
-use super::errors::describe;
+use super::errors::result as error_result;
 use super::input::{CaptureProof, drag_path, type_chunks};
 use crate::cli::{active, capture_region, locate_target, scaled_template, screen_region};
 use crate::commands::{display as display_command, session, window as window_command};
@@ -15,8 +15,12 @@ use std::io::BufRead;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// A successful result: the object as JSON text (for older clients and
+/// people reading transcripts) and as `structuredContent` (matching the
+/// tool's `outputSchema`). The server drops `structuredContent` for clients
+/// that negotiated a protocol older than 2025-06-18.
 fn text(value: Value) -> Value {
-    json!({"content":[{"type":"text","text":value.to_string()}],"isError":false})
+    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
 }
 fn rect(rect: Rect) -> Value {
     json!({"left":rect.left,"top":rect.top,"width":rect.width,"height":rect.height})
@@ -24,20 +28,46 @@ fn rect(rect: Rect) -> Value {
 fn display_info(display: &Display) -> Value {
     json!({"device_name":display.name(),"friendly_name":display.friendly_name(),"id":display.id(),"rect":rect(display.bounds()),"primary":display.is_primary(),"coordinates":"windows desktop physical pixels"})
 }
-fn png(frame: Screenshot, metadata: Value) -> Result<Value> {
-    let rgb = image::RgbImage::from_raw(frame.width, frame.height, frame.pixels)
-        .ok_or(Error::InvalidArgument("invalid frame"))?;
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    rgb.write_to(&mut bytes, image::ImageFormat::Png)
+/// Lossless PNG for MCP captures: zlib level 1 with the Sub filter. On a
+/// synthetic 1920x1080 desktop this is ~3.7x faster and ~43% smaller than
+/// `write_to` (image 0.25 defaults: fdeflate "fast" + adaptive filtering,
+/// whose per-row filter search dominates); see `png_encode_bench`.
+fn encode_png(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    compression: image::codecs::png::CompressionType,
+    filter: image::codecs::png::FilterType,
+) -> Result<Vec<u8>> {
+    use image::ImageEncoder;
+    let mut bytes = Vec::new();
+    image::codecs::png::PngEncoder::new_with_quality(&mut bytes, compression, filter)
+        .write_image(pixels, width, height, image::ExtendedColorType::Rgb8)
         .map_err(|e| Error::Screenshot(e.to_string()))?;
-    if bytes.get_ref().len() > 12 * 1024 * 1024 {
+    Ok(bytes)
+}
+fn png(frame: Screenshot, metadata: Value) -> Result<Value> {
+    let expected = u64::from(frame.width) * u64::from(frame.height) * 3;
+    if frame.width == 0 || frame.height == 0 || frame.pixels.len() as u64 != expected {
+        return Err(Error::InvalidArgument("invalid frame"));
+    }
+    let bytes = encode_png(
+        frame.width,
+        frame.height,
+        &frame.pixels,
+        image::codecs::png::CompressionType::Level(1),
+        image::codecs::png::FilterType::Sub,
+    )?;
+    if bytes.len() > 12 * 1024 * 1024 {
         return Err(Error::InvalidArgument(
             "PNG exceeds 12 MiB; request a smaller region",
         ));
     }
+    // Image tools keep the image block; the metadata is also structured.
     Ok(
         json!({"content":[{"type":"text","text":metadata.to_string()},
-        {"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())}],"isError":false}),
+        {"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes)}],
+        "structuredContent":metadata,"isError":false}),
     )
 }
 fn info(window: &Window) -> Result<Value> {
@@ -934,8 +964,10 @@ impl autogui_protocol::server::Handler for Session {
         args: Value,
         check: &dyn Fn() -> std::io::Result<()>,
     ) -> std::io::Result<Value> {
-        self.call(name, args, &|| check().map_err(Error::Io))
-            .map_err(|e| std::io::Error::other(describe(&e)))
+        // Tool failures are results (isError), not transport errors.
+        Ok(self
+            .call(name, args, &|| check().map_err(Error::Io))
+            .unwrap_or_else(|e| error_result(&e)))
     }
 }
 
@@ -1023,6 +1055,7 @@ impl Drop for PauseLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::errors::{describe, report};
 
     fn session() -> Session {
         Session {
@@ -1335,6 +1368,187 @@ mod tests {
             Error::Io(std::io::Error::other("disk")),
         ] {
             assert_eq!(describe(&error), error.to_string());
+        }
+    }
+
+    #[test]
+    fn errors_carry_stable_codes_and_retryability() {
+        let cases: Vec<(Error, &str, bool)> = vec![
+            (Error::WindowNotFound, "window_not_found", false),
+            (Error::ImageNotFound, "image_not_found", true),
+            (Error::FailSafe(Point::new(0, 0)), "fail_safe", true),
+            (
+                Error::PermissionDenied("SetForegroundWindow"),
+                "permission_denied",
+                true,
+            ),
+            (
+                Error::PermissionDenied("app_launch disabled; set AUTOGUI_ALLOW_LAUNCH=1"),
+                "permission_denied",
+                false,
+            ),
+            (
+                Error::InvalidArgument("x required"),
+                "invalid_argument",
+                false,
+            ),
+            (
+                Error::InvalidArgument("window moved during capture; retry"),
+                "invalid_argument",
+                true,
+            ),
+            (
+                Error::Input("invalid tool arguments: unknown field".into()),
+                "invalid_argument",
+                false,
+            ),
+            (Error::Input("enigo".into()), "input_failed", true),
+            (Error::Screenshot("dxgi".into()), "capture_failed", true),
+            (Error::UnsupportedPlatform, "unsupported", false),
+            (Error::FeatureDisabled("opencv"), "unsupported", false),
+            (
+                Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "late")),
+                "timeout",
+                true,
+            ),
+            (
+                Error::Input("request cancelled or client disconnected".into()),
+                "cancelled",
+                true,
+            ),
+            (
+                Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone")),
+                "not_found",
+                false,
+            ),
+            (Error::Io(std::io::Error::other("disk")), "internal", false),
+        ];
+        for (error, code, retryable) in cases {
+            let r = crate::mcp::errors::result(&error);
+            assert_eq!(r["isError"], true);
+            let s = &r["structuredContent"];
+            assert_eq!(s["code"], code, "{error}");
+            assert_eq!(s["retryable"], retryable, "{error}");
+            assert_eq!(s["message"], error.to_string());
+            assert_eq!(r["content"][0]["text"], describe(&error));
+            assert_eq!(s["hint"].is_string(), !report(&error).hint.is_empty());
+        }
+    }
+
+    #[test]
+    fn handler_returns_tool_errors_as_results() {
+        let mut s = Session::default();
+        let r = autogui_protocol::Handler::call(
+            &mut s,
+            "type_text",
+            json!({"target":"never","text":"x","extra":1}),
+            &|| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(r["isError"], true);
+        assert_eq!(r["structuredContent"]["code"], "invalid_argument");
+        assert!(s.gui.is_none());
+    }
+
+    /// A synthetic 1920x1080 desktop: flat panels, a gradient title bar,
+    /// dense "text" rows and a noisy photo-like quarter, roughly like real
+    /// screen content.
+    fn synthetic_frame(width: u32, height: u32) -> Screenshot {
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+        let mut seed = 0x2545_f491_u32;
+        for y in 0..height {
+            for x in 0..width {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 28) as u8;
+                let px = if x >= width / 2 && y >= height / 2 {
+                    [
+                        ((x * 200 / width) as u8).wrapping_add(noise),
+                        ((y * 200 / height) as u8).wrapping_add(noise),
+                        120u8.wrapping_add(noise),
+                    ]
+                } else if y < 32 {
+                    [(x * 255 / width) as u8, 80, 160]
+                } else if (y / 18) % 3 == 0 && (x / 7 + y) % 5 < 2 && x % 600 < 520 {
+                    [20, 20, 20]
+                } else if x < 280 {
+                    [243, 243, 243]
+                } else {
+                    [255, 255, 255]
+                };
+                pixels.extend_from_slice(&px);
+            }
+        }
+        Screenshot {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    #[test]
+    fn png_result_is_lossless_and_structured() {
+        let frame = synthetic_frame(64, 48);
+        let r = png(frame.clone(), json!({"capture_id":"c1"})).unwrap();
+        assert_eq!(r["structuredContent"], json!({"capture_id":"c1"}));
+        assert_eq!(r["content"][1]["mimeType"], "image/png");
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(r["content"][1]["data"].as_str().unwrap())
+            .unwrap();
+        let decoded = image::load_from_memory(&data).unwrap().to_rgb8();
+        assert_eq!(decoded.into_raw(), frame.pixels);
+        let mut bad = frame;
+        bad.pixels.pop();
+        assert!(png(bad, json!({})).is_err());
+    }
+
+    /// cargo test --release -p autogui-control-core png_encode_bench -- --ignored --nocapture
+    #[test]
+    #[ignore = "benchmark; run in release"]
+    fn png_encode_bench() {
+        use image::codecs::png::{CompressionType, FilterType};
+        let frame = synthetic_frame(1920, 1080);
+        let time = |label: &str, encode: &dyn Fn() -> usize| {
+            let start = Instant::now();
+            let mut bytes = 0;
+            for _ in 0..5 {
+                bytes = encode();
+            }
+            println!(
+                "{label}: {:.1} ms, {bytes} bytes",
+                start.elapsed().as_secs_f64() * 1000.0 / 5.0
+            );
+        };
+        time("write_to (previous)", &|| {
+            let rgb =
+                image::RgbImage::from_raw(frame.width, frame.height, frame.pixels.clone()).unwrap();
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            rgb.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+            bytes.into_inner().len()
+        });
+        for (label, level, filter) in [
+            ("fast/adaptive", CompressionType::Fast, FilterType::Adaptive),
+            ("fast/sub", CompressionType::Fast, FilterType::Sub),
+            (
+                "level1/sub (used)",
+                CompressionType::Level(1),
+                FilterType::Sub,
+            ),
+            (
+                "level1/adaptive",
+                CompressionType::Level(1),
+                FilterType::Adaptive,
+            ),
+            (
+                "default/adaptive",
+                CompressionType::Default,
+                FilterType::Adaptive,
+            ),
+        ] {
+            time(label, &|| {
+                encode_png(frame.width, frame.height, &frame.pixels, level, filter)
+                    .unwrap()
+                    .len()
+            });
         }
     }
 }
