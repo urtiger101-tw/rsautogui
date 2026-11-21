@@ -40,14 +40,15 @@ impl Client {
         };
         let result=client.request("initialize",json!({"protocolVersion":"2025-11-25","clientInfo":{"name":"native-fixture","version":"1"},"capabilities":{}}));
         assert_eq!(result["protocolVersion"], "2025-11-25");
+        assert_eq!(result["serverInfo"]["title"], "AutoGui Windows Control");
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
-        assert_eq!(
-            client.request("tools/list", json!({}))["tools"]
-                .as_array()
-                .unwrap()
-                .len(),
-            19
-        );
+        let tools = client.request("tools/list", json!({}))["tools"].clone();
+        let tools = tools.as_array().unwrap();
+        assert_eq!(tools.len(), 19);
+        for tool in tools {
+            assert!(tool["title"].is_string(), "{tool}");
+            assert_eq!(tool["outputSchema"]["type"], "object", "{tool}");
+        }
         client
     }
     pub fn send(&mut self, value: Value) {
@@ -88,7 +89,11 @@ impl Client {
     pub fn tool(&mut self, name: &str, args: Value) -> Value {
         let value = self.raw_tool(name, args);
         assert_eq!(value["isError"], false, "tool {name}: {value}");
-        serde_json::from_str(value["content"][0]["text"].as_str().unwrap()).unwrap()
+        let parsed: Value =
+            serde_json::from_str(value["content"][0]["text"].as_str().unwrap()).unwrap();
+        // The JSON text block and structuredContent carry the same object.
+        assert_eq!(value["structuredContent"], parsed, "tool {name}");
+        parsed
     }
 }
 impl Drop for Client {
