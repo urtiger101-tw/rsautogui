@@ -161,6 +161,24 @@ pub(super) fn drag_path(from: Point, to: Point, steps: i32) -> Vec<Point> {
         .collect()
 }
 
+/// Longest single sleep inside [`sleep_sliced`].
+const SLEEP_SLICE: Duration = Duration::from_millis(16);
+
+/// Sleeps `duration` in slices of at most 16 ms, calling `poll` (typically
+/// cancellation plus the corner fail-safe) before each slice and once at the
+/// end; returns the first error at once. For waits while a button is held.
+pub(super) fn sleep_sliced(duration: Duration, mut poll: impl FnMut() -> Result<()>) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        poll()?;
+        let left = duration.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(left.min(SLEEP_SLICE));
+    }
+}
+
 pub(super) fn type_chunks(text: &str, mut send: impl FnMut(&str) -> Result<()>) -> Result<()> {
     let mut remaining = text;
     while !remaining.is_empty() {
@@ -318,6 +336,42 @@ mod tests {
             frame.set_pixel(0, 0, Rgb::new(4, 5, 6)).unwrap();
             assert_ne!(p.patch(point).unwrap().1, frame);
         }
+    }
+
+    #[test]
+    fn sliced_sleep_polls_every_slice_and_stops_on_error() {
+        let mut polls = 0;
+        sleep_sliced(Duration::ZERO, || {
+            polls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(polls, 1);
+
+        let mut polls = 0;
+        let start = Instant::now();
+        sleep_sliced(Duration::from_millis(100), || {
+            polls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert!(start.elapsed() >= Duration::from_millis(100));
+        // At most 16 ms between polls: at least 100/16 slices plus the last poll.
+        assert!(polls >= 8, "{polls} polls");
+
+        let mut polls = 0;
+        let start = Instant::now();
+        let error = sleep_sliced(Duration::from_secs(5), || {
+            polls += 1;
+            if polls == 3 {
+                Err(Error::FailSafe(Point::new(0, 0)))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(error, Err(Error::FailSafe(_))));
+        assert_eq!(polls, 3);
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

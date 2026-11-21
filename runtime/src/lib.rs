@@ -43,9 +43,7 @@ pub unsafe extern "C" fn autogui_call_json(
             if unsafe { check(context) } {
                 Ok(())
             } else {
-                Err(autogui::Error::Input(
-                    "request cancelled or client disconnected".into(),
-                ))
+                Err(app::mcp::errors::cancelled())
             }
         };
         let value = SESSION.with(|s| {
