@@ -56,9 +56,9 @@ Retry 3 and 4 only after re-observing the window or screen. Codes 2 and 5 need a
 
 ## Global flags
 
-`--json` (for `doctor`, `session status` and `-V`; errors are written as JSON to stderr), `--quiet`, `--no-color` (also `NO_COLOR`), `--lang en|zh` (also `AUTOGUI_LANG`, then the Windows UI language), `-V`/`--version`, `-h`/`--help` and `help <command>`. Text after `--` is always positional, so a literal `--json` is typed with `& $exe type Notepad -- --json`. `--doctor` is an alias for `doctor`.
+`--json` (for `doctor`, `session status`, `list`, `wait`, `capture`, `type`, `locate`, `click`, `mcp config` and `-V`; errors are written as JSON to stderr), `--quiet`, `--no-color` (also `NO_COLOR`), `--lang en|zh` (also `AUTOGUI_LANG`, then the Windows UI language), `-V`/`--version`, `-h`/`--help` and `help <command>`. Global flags work before the command word, and after it for every command except `type`, whose text is typed verbatim (`& $exe type Notepad --json` types `--json`). Text after `--` is always positional. `--doctor` is an alias for `doctor`.
 
 ## Doctor and MCP helpers
 
 - `doctor` is read-only: DLL and ABI, EXE/DLL versions, session readiness, fail-safe, `app_launch` state, host registrations (Claude Code, Claude Desktop, Codex, OpenCode, AGY), the Skill's `runtime.json` and an MCP self-handshake. It exits 5 when any check fails.
-- `mcp` runs the stdio server. `mcp tools --format mcp|anthropic|openai|openai-chat` exports the tool definitions (`mcp` is the default). `mcp config --host claude-code|claude-desktop|codex|openai-agents|opencode|agy` prints a registration snippet and writes no files.
+- `mcp` runs the stdio server. `mcp tools --format mcp|anthropic|openai|openai-chat` exports the tool definitions (`mcp` is the default). `mcp config --host claude-code|claude-desktop|codex|openai-agents|opencode|agy` prints only the registration snippet on stdout (guidance on stderr; `--json` gives `{host, file, snippet, command}`) and writes no files.

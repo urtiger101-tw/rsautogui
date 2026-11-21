@@ -24,9 +24,23 @@
 ### Changed
 
 - **Exit codes.** Failures no longer always exit 1. `0` ok, `1` operation failed, `2` usage error, `3` window or image not found, `4` timeout, `5` environment blocked (including `PermissionDenied`, for example lost focus, and a failed `doctor`), `6` fail-safe triggered, `70` internal error. Scripts that test for `1` should test for non-zero or the specific code.
-- CLI `type` sends text in batches of at most 32 characters and checks foreground and cancellation before each batch. Text that starts with `--` must follow `--`: `autogui-control type Notepad -- --json`.
+- CLI `type` sends text in batches of at most 32 characters and checks foreground and cancellation before each batch.
 - MCP `structuredContent` is returned only when the negotiated protocol version is 2025-06-18 or later; older clients keep receiving the text block only.
 - Library: `AutoGui` window getters take `&self`.
+
+### Fixed
+
+- Fail-safe and MCP cancellation are checked for the whole parallel image search, and a panicking search thread stops the others.
+- `typewrite` checks the fail-safe before each batch of at most 32 characters; MCP display `drag` checks cancellation and the fail-safe every 16 ms while the button is held.
+- After MCP stdin closes, already queued requests are still answered: read-only tools run, all other tools return `cancelled`.
+- MCP accepts a leading UTF-8 byte-order mark on stdin (sent by Windows PowerShell 5.1 hosts).
+- MCP bad arguments return a clean `invalid_argument` error; cancellation is recognised by type, not by message text.
+- CLI global flags are recognised before the command word, and after it for every command except `type`, so text such as `--json` is typed as in 0.1.0. `--` ends flag parsing.
+- `--lang en` no longer prints Chinese for `session`, `screensaver`, `window`, `capture` and `type`; usage errors are fully localized. "Did you mean" handles swapped letters (`lsit` → `list`).
+- `mcp config` prints only the snippet on stdout (valid JSON or TOML) and the guidance on stderr; `--json` returns `{host, file, snippet, command}`.
+- `capture`, `type`, `locate` and `click` honour `--json`.
+- Ambiguity and race errors (several windows or images match, the window moved) exit `1` with a specific hint instead of `2` with a usage hint.
+- `doctor --json` is always English, Windows paths are no longer wrapped, and a stale registration in another host is a warning, not a failure.
 
 ### Performance
 
