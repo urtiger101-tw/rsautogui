@@ -36,6 +36,12 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=no
 SetupLogging=yes
+; Inno Setup 6.7 enables Windows RedirectionGuard by default, and the child
+; install.ps1 inherits it: user-created junctions are not followed, so the
+; standard Codex CLI (%LOCALAPPDATA%\Programs\OpenAI\Codex\bin is a junction)
+; is invisible. The mitigation guards elevated installers against redirection;
+; this per-user setup never elevates (PrivilegesRequired=lowest).
+RedirectionGuard=no
 WizardStyle=modern
 Compression=lzma2
 SolidCompression=yes

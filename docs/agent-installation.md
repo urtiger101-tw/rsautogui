@@ -45,9 +45,9 @@ Codex 的 MCP 安裝需要本機 Codex CLI；其餘宿主只寫設定檔。JSONC
 
 ```powershell
 # 只安裝程式
-.\AutoGui-0.2.1-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+.\AutoGui-0.2.2-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 # 為 Claude Code 安裝 Skill 與 MCP，為 Codex 只安裝 Skill，並記錄安裝日誌
-.\AutoGui-0.2.1-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="skill\claude,mcp\claude,skill\codex" /LOG="$env:TEMP\autogui-setup.log"
+.\AutoGui-0.2.2-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="skill\claude,mcp\claude,skill\codex" /LOG="$env:TEMP\autogui-setup.log"
 ```
 
 升級：安裝前會先執行既有程式目錄內的 `uninstall.ps1`（靜默安裝也一樣），依清單移除未變更的檔案並還原 MCP 設定，再安裝新版。若仍有使用者修改過的檔案，該腳本會保留它們並中止安裝；關閉使用 `autogui-control.exe` 的 Agent 後重試，修改內容不會被覆蓋。
