@@ -67,10 +67,79 @@ Assert (-not (Test-Path -LiteralPath $profile2)) 'Program-only installation wrot
 # Collision must fail before installing any program file.
 $profile3=Join-Path $fixture 'profile-collision'
 New-Item -ItemType Directory -Path (Join-Path $profile3 '.claude\skills\autogui-control') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $profile3 '.claude\skills\autogui-control\SKILL.md'),'fixture: user Skill',$utf8)
 $failed=$false
 try { & (Join-Path $PackageRoot 'install.ps1') -HomeDirectory $profile3 -InstallDir (Join-Path $fixture 'collision') -SkillHosts claude -NonInteractive } catch { $failed=$true }
 Assert $failed 'Existing Skill not protected'
 Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'collision'))) 'Collision left a partial installation'
+Assert ([IO.File]::ReadAllText((Join-Path $profile3 '.claude\skills\autogui-control\SKILL.md')) -ceq 'fixture: user Skill') 'Collision changed the existing Skill'
+
+# Empty directories left by an earlier uninstall do not block the Skill.
+$leftoverProfile=Join-Path $fixture 'profile-leftover'
+$leftoverInstall=Join-Path $fixture 'program-leftover'
+New-Item -ItemType Directory -Path (Join-Path $leftoverProfile '.claude\skills\autogui-control\agents') -Force | Out-Null
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $leftoverProfile -InstallDir $leftoverInstall -SkillHosts claude -NonInteractive
+Assert (Test-Path -LiteralPath (Join-Path $leftoverProfile '.claude\skills\autogui-control\SKILL.md')) 'Empty leftover Skill directory blocked installation'
+&(Join-Path $leftoverInstall 'uninstall.ps1')
+Assert (-not (Test-Path -LiteralPath (Join-Path $leftoverProfile '.claude\skills\autogui-control'))) 'Leftover Skill directory not removed'
+
+# Uninstall removes every empty directory it recorded, including distinct
+# directories whose paths have the same length.
+$sameProfile=Join-Path $fixture 'profile-same-length'
+$sameInstall=Join-Path $fixture 'program-same-length'
+$sameRoots=@((Join-Path $sameProfile 'roots\aa'),(Join-Path $sameProfile 'roots\bb'))
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $sameProfile -InstallDir $sameInstall -CustomSkillRoots $sameRoots -NonInteractive
+foreach($root in $sameRoots) { Assert (Test-Path -LiteralPath (Join-Path $root 'autogui-control\SKILL.md')) "Custom Skill missing: $root" }
+&(Join-Path $sameInstall 'uninstall.ps1')
+foreach($root in $sameRoots) { Assert (-not (Test-Path -LiteralPath (Join-Path $root 'autogui-control'))) "Uninstall left an empty Skill directory: $root" }
+
+# An existing autogui MCP entry is never overwritten and does not fail the install.
+# The same definition is accepted silently; a different one is kept with a warning.
+$existingInstall=Join-Path $fixture 'program-existing'
+$existingExe=Join-Path $existingInstall 'autogui-control.exe'
+foreach($case in @(
+    @{Name='same';Claude=(@{mcpServers=@{autogui=@{args=@('mcp');command=$existingExe}}} | ConvertTo-Json -Depth 5);Open=('{"mcp":{"autogui":{"command":'+(@($existingExe,'mcp') | ConvertTo-Json -Compress)+',"enabled":true,"type":"local"}}}');Warning=$false},
+    @{Name='different';Claude='{"mcpServers":{"autogui":{"command":"C:\\elsewhere\\autogui-control.exe","args":["mcp"]}}}';Open='{"mcp":{"autogui":{"type":"local","command":["autogui-control","mcp","--debug"]}}}';Warning=$true}
+)) {
+    $existingProfile=Join-Path $fixture ("profile-existing-"+$case.Name)
+    $install5=Join-Path $fixture ("program-existing-"+$case.Name)
+    if ($case.Name -eq 'same') { $install5=$existingInstall }
+    $claudePath=Join-Path $existingProfile '.claude.json'
+    $openPath=Join-Path $existingProfile '.config\opencode\opencode.json'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $openPath) -Force | Out-Null
+    [IO.File]::WriteAllText($claudePath,$case.Claude,$utf8)
+    [IO.File]::WriteAllText($openPath,$case.Open,$utf8)
+    $warningFile=Join-Path $fixture ("warnings-existing-"+$case.Name+".txt")
+    &(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $existingProfile -InstallDir $install5 -SkillHosts claude -McpHosts claude,opencode -WarningFile $warningFile -NonInteractive 3>$null
+    Assert ([IO.File]::ReadAllText($claudePath) -ceq $case.Claude) "Existing Claude MCP entry changed ($($case.Name))"
+    Assert ([IO.File]::ReadAllText($openPath) -ceq $case.Open) "Existing OpenCode MCP entry changed ($($case.Name))"
+    Assert (Test-Path -LiteralPath (Join-Path $existingProfile '.claude\skills\autogui-control\SKILL.md')) "Existing MCP entry blocked the Skill ($($case.Name))"
+    $warned=(Test-Path -LiteralPath $warningFile) -and ([IO.File]::ReadAllText($warningFile) -match 'different autogui MCP server')
+    Assert ($warned -eq $case.Warning) "Existing MCP entry warning wrong ($($case.Name))"
+    $existingManifest=Get-Content -LiteralPath (Join-Path $install5 '.install\manifest.json') -Raw | ConvertFrom-Json
+    Assert (@($existingManifest.mcp_hosts).Count -eq 0) "Unchanged hosts recorded as configured ($($case.Name))"
+    &(Join-Path $install5 'uninstall.ps1')
+    Assert ([IO.File]::ReadAllText($claudePath) -ceq $case.Claude) "Uninstall changed an entry it did not write ($($case.Name))"
+}
+
+# Upgrade as Setup performs it: the old uninstall keeps an edited .claude.json
+# (with its autogui entry) and Setup moves the program directory aside.
+$upgradeProfile=Join-Path $fixture 'profile-upgrade'
+$upgradeInstall=Join-Path $fixture 'program-upgrade'
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $upgradeProfile -InstallDir $upgradeInstall -SkillHosts claude,codex -McpHosts claude,agy -NonInteractive
+$upgradeClaude=Join-Path $upgradeProfile '.claude.json'
+$upgradeText=[IO.File]::ReadAllText($upgradeClaude).Replace('"mcpServers"','"numStartups": 7, "mcpServers"')
+[IO.File]::WriteAllText($upgradeClaude,$upgradeText,$utf8)
+&(Join-Path $upgradeInstall 'uninstall.ps1') 3>$null
+Assert (Test-Path -LiteralPath (Join-Path $upgradeInstall '.install\manifest.json')) 'Edited config did not keep the manifest'
+Rename-Item -LiteralPath $upgradeInstall -NewName ((Split-Path -Leaf $upgradeInstall)+'.preserved-test')
+$upgradeWarnings=Join-Path $fixture 'warnings-upgrade.txt'
+&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory $upgradeProfile -InstallDir $upgradeInstall -SkillHosts claude,codex -McpHosts claude,agy -WarningFile $upgradeWarnings -NonInteractive
+Assert (-not (Test-Path -LiteralPath $upgradeWarnings)) 'Upgrade produced warnings'
+Assert ([IO.File]::ReadAllText($upgradeClaude) -ceq $upgradeText) 'Upgrade changed the kept Claude config'
+Assert ((Get-Content -LiteralPath (Join-Path $upgradeProfile '.gemini\config\mcp_config.json') -Raw | ConvertFrom-Json).mcpServers.autogui.args[0] -eq 'mcp') 'Upgrade did not register AGY'
+foreach($relative in @('.claude\skills','.codex\skills')) { Assert (Test-Path -LiteralPath (Join-Path $upgradeProfile "$relative\autogui-control\SKILL.md")) "Upgrade did not install Skill $relative" }
+&(Join-Path $upgradeInstall 'uninstall.ps1')
 
 # Preserve user edits to a newly created host config and unrelated Skill roots.
 $profile4=Join-Path $fixture 'profile-edited'
@@ -207,4 +276,4 @@ try {
     $previewText=(&(Join-Path $PackageRoot 'install.ps1') -HomeDirectory (Join-Path $fixture 'profile-codex-order') -InstallDir (Join-Path $fixture 'program-codex-order') -McpHosts codex -NonInteractive -Preview 6>&1 3>$null | Out-String)
 } finally { $env:Path=$savedPath }
 Assert ($previewText -match [regex]::Escape("Codex CLI: $(Join-Path $realDir 'codex.cmd')")) 'Broken codex on PATH was not skipped'
-Write-Host "PASS installer: all four hosts, claude-desktop MCP (isolated AppData, preview, byte-exact restore, created-config removal, Skill rejection), JSONC preservation, byte-exact empty/whitespace backups and restoration, shared/legacy/custom AGY Skill roots, optional Codex (broken CLI, failed add, PATH fallback), program-only, collision, isolated root $fixture"
+Write-Host "PASS installer: all four hosts, claude-desktop MCP (isolated AppData, preview, byte-exact restore, created-config removal, Skill rejection), JSONC preservation, byte-exact empty/whitespace backups and restoration, shared/legacy/custom AGY Skill roots, optional Codex (broken CLI, failed add, PATH fallback), program-only, collision, empty leftover Skill, same-length Skill roots, existing MCP entries, upgrade, isolated root $fixture"

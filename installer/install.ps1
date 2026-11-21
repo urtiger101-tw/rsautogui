@@ -87,7 +87,8 @@ $skillSource = Join-Path $package 'skills\autogui-control'
 $selectedRoots = @($SkillHosts | ForEach-Object { $roots[$_] }) + @($CustomSkillRoots)
 foreach ($root in @($selectedRoots | Select-Object -Unique)) {
     $target = Full (Join-Path $root 'autogui-control')
-    if (Test-Path -LiteralPath $target) { throw "Skill already exists; preserved: $target" }
+    # An earlier uninstall can leave empty directories behind; only files block the Skill.
+    if ((Test-Path -LiteralPath $target) -and @(Get-ChildItem -LiteralPath $target -Recurse -File -Force).Count) { throw "Skill already exists; preserved: $target" }
     foreach ($file in Get-ChildItem -LiteralPath $skillSource -Recurse -File) {
         $relative = $file.FullName.Substring($skillSource.Length).TrimStart('\')
         [void]$copies.Add(@{Source=$file.FullName; Path=(Join-Path $target $relative); Text=$null})
@@ -130,6 +131,19 @@ function InvokeCodex([string]$Command, [string[]]$Arguments) {
         return @{Ok=$false; Output=''}
     } finally { $env:CODEX_HOME = $previous }
 }
+# True when an existing JSON server definition starts this installation's executable
+# with the single argument 'mcp'. Text that is not plain JSON counts as different.
+function SameServer([string]$HostName, [string]$Text) {
+    try { $server = $Text | ConvertFrom-Json } catch { return $false }
+    if ($null -eq $server -or $server -isnot [Management.Automation.PSCustomObject]) { return $false }
+    $properties = $server.PSObject.Properties
+    if (-not $properties['command']) { return $false }
+    $command = @($server.command)
+    $arguments = @(if ($properties['args']) { $server.args })
+    if ($HostName -eq 'opencode') { $arguments = @($command | Select-Object -Skip 1); $command = @($command | Select-Object -First 1) }
+    if ($command.Count -ne 1 -or $arguments.Count -ne 1 -or $arguments[0] -cne 'mcp') { return $false }
+    try { return [string]::Equals((Full ([string]$command[0])), $exe, [StringComparison]::OrdinalIgnoreCase) } catch { return $false }
+}
 $codexCommand = $null
 $codexHint = "Register it later with: codex mcp add autogui -- `"$exe`" mcp"
 foreach ($name in @($McpHosts)) {
@@ -162,13 +176,24 @@ foreach ($name in @($McpHosts)) {
         if ([string]::IsNullOrWhiteSpace($before)) { $before = '{}' }
         $definition = if ($name -eq 'opencode') { @{type='local';command=@($exe,'mcp');enabled=$true} } else { @{command=$exe;args=@('mcp')} }
         $container = if ($name -eq 'opencode') { 'mcp' } else { 'mcpServers' }
+        # An existing entry is never overwritten. An upgrade usually finds this
+        # installation's own entry, because an uninstall keeps configs edited since.
+        $existingServer = [AutoGuiJson]::ServerValue($before, $container, 'autogui')
+        if ($null -ne $existingServer) {
+            if (SameServer $name $existingServer) {
+                Write-Host "$name already registers this autogui MCP server; left unchanged."
+            } else {
+                Warn "$name already has a different autogui MCP server in $path; it was left unchanged. Remove that entry and run Setup again to point it at $exe."
+            }
+            continue
+        }
         $updated = [AutoGuiJson]::AddServer($before, $container, 'autogui', ($definition | ConvertTo-Json -Compress))
     }
     [void]$changes.Add(@{Host=$name; Path=$path; Text=$updated; BeforeHash=$(if (Test-Path -LiteralPath $path) { Hash $path } else { $null })})
 }
 Write-Host "Program: $InstallDir"
 # The manifest lists only hosts this installation actually configures.
-$McpHosts = @($McpHosts | Where-Object { $_ -ne 'codex' -or @($changes | Where-Object { $_.Host -eq 'codex' }).Count })
+$McpHosts = @($McpHosts | Where-Object { $selected = $_; @($changes | Where-Object { $_.Host -eq $selected }).Count })
 function SaveWarnings {
     if ($WarningFile -and $warnings.Count) { WriteUtf8 (Full $WarningFile) (($warnings.ToArray()) -join "`r`n") }
 }

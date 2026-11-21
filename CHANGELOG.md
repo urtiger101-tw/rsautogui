@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.3 — 2026-11-22
+
+### Fixed
+
+- Installer: upgrading no longer fails with `MCP server already exists: autogui`. Uninstall keeps any host config edited after installation, and Claude Code edits `~/.claude.json` constantly, so an upgrade found the previous installation's `autogui` entry still present. `install.ps1` now never overwrites an existing JSON host entry: when it already starts this installation's `autogui-control.exe mcp` it is accepted silently; otherwise it is kept and Setup shows a note. Only hosts the installation changed are recorded in the manifest.
+- Installer: uninstall now removes every empty directory it recorded. It deduplicated with `Sort-Object Length -Unique`, which treats distinct paths of the same length as duplicates, so directories such as `~/.claude/skills/autogui-control/agents` could remain and block the next installation with `Skill already exists`. `install.ps1` also accepts a Skill directory that contains no files, so upgrades from 0.2.2 (whose uninstall still has the bug) succeed.
+
 ## 0.2.2 — 2026-11-21
 
 ### Fixed

@@ -29,7 +29,9 @@ foreach ($record in $records) {
     }
 }
 # Only remove empty directories recorded by this installation, never recursively.
-foreach ($directory in @($directories | Sort-Object Length -Descending -Unique)) {
+# Deduplicate by path first: Sort-Object -Unique compares only the sort key, so it
+# would drop distinct directories whose paths have the same length.
+foreach ($directory in @($directories | Sort-Object -Unique | Sort-Object Length -Descending)) {
     if ((Test-Path -LiteralPath $directory) -and @(Get-ChildItem -LiteralPath $directory -Force).Count -eq 0) { Remove-Item -LiteralPath $directory }
 }
 if ($pending.Count) {
