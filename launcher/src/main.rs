@@ -1,25 +1,195 @@
+//! autogui-control launcher. Handles help, version, doctor and MCP
+//! initialize/tools/list without loading autogui_runtime.dll.
 use autogui_protocol::server as mcp;
+use help::Lang;
+use serde_json::json;
+
+mod args;
+mod doctor;
+mod help;
+mod mcp_cmd;
 #[cfg(windows)]
 mod windows;
 
+/// MCP protocol version this build speaks.
+pub const PROTOCOL: &str = "2025-11-25";
+/// C ABI version of autogui_runtime.dll this launcher accepts.
+pub const EXPECTED_ABI: u32 = 1;
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+const RUNTIME_DLL: &str = "autogui_runtime.dll";
+
+pub const EXIT_FAILED: i32 = 1;
+pub const EXIT_USAGE: i32 = 2;
+pub const EXIT_BLOCKED: i32 = 5;
+
 fn main() {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.is_empty() || args == ["--help"] {
-        println!(
-            "AutoGui Windows control\n  autogui-control mcp\n  autogui-control display list\n  autogui-control display capture <device name> <output.png>\n  autogui-control display move <device name> <unique title>\n  autogui-control list [title] [--process name] [--foreground]\n  autogui-control wait <title> [present|absent|foreground] [timeout] [--process name]\n  autogui-control capture <title> <output.png>\n  autogui-control locate|click <title> <template> [confidence|exact] [timeout] [scale]\n  autogui-control type <title> <text>\n  autogui-control window <inspect|activate|minimize|maximize|restore|show|hide|move|resize|close> <title> [x y|width height]\n  autogui-control screensaver status|pause [1..86400 seconds]|resume|stop\n\nRuntime: autogui_runtime.dll beside this EXE; loaded on demand.\nMCP initialization/tool listing do not load the DLL. Full image formats retained.\nDefault: primary monitor. capture/locate/click accept a final --display <device name>.\nExplicit display coordinates use Windows desktop physical pixels (may be negative).\nVirtual displays require an optional IDD driver; all displays share input/focus.\nPrimary-monitor corner fail-safe remains enabled.\nTitles must match one window. close requests WM_CLOSE; it does not confirm exit."
+    std::process::exit(run());
+}
+
+pub fn runtime_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .map(|p| p.with_file_name(RUNTIME_DLL))
+        .unwrap_or_else(|_| RUNTIME_DLL.into())
+}
+
+#[cfg(windows)]
+fn ui_language() -> Option<u16> {
+    Some(unsafe { ::windows_sys::Win32::Globalization::GetUserDefaultUILanguage() })
+}
+#[cfg(not(windows))]
+fn ui_language() -> Option<u16> {
+    None
+}
+
+/// One-line message, optional suggestion, then the pointer to --help (stderr).
+pub fn usage_error(message: &str, suggestion: Option<&str>, json: bool, lang: Lang) -> i32 {
+    if json {
+        eprintln!(
+            "{}",
+            json!({"error":{"kind":"usage","exit_code":EXIT_USAGE,"message":message,"suggestion":suggestion}})
         );
-        return;
+        return EXIT_USAGE;
     }
-    #[cfg(windows)]
-    let result = if args == ["mcp"] {
-        mcp::run(windows::LazyEngine::default())
+    match lang {
+        Lang::En => {
+            eprintln!("autogui-control: {message}");
+            if let Some(s) = suggestion {
+                eprintln!("Did you mean '{s}'?");
+            }
+            eprintln!("Run autogui-control --help");
+        }
+        Lang::Zh => {
+            eprintln!("autogui-control：{message}");
+            if let Some(s) = suggestion {
+                eprintln!("您是指「{s}」嗎？");
+            }
+            eprintln!("請執行 autogui-control --help");
+        }
+    }
+    EXIT_USAGE
+}
+
+fn print_version(json: bool) {
+    if json {
+        let path = runtime_path();
+        println!(
+            "{}",
+            json!({
+                "version": VERSION,
+                "abi": EXPECTED_ABI,
+                "protocol": PROTOCOL,
+                "runtime_found": path.is_file(),
+                "runtime_path": path.display().to_string(),
+            })
+        );
     } else {
-        windows::run_cli()
-    };
+        println!("autogui-control {VERSION}");
+    }
+}
+
+fn run_mcp() -> i32 {
+    #[cfg(windows)]
+    let result = mcp::run(windows::LazyEngine::default());
     #[cfg(not(windows))]
     let result: std::io::Result<()> = Err(std::io::Error::other("Windows runtime required"));
-    if let Err(e) = result {
-        eprintln!("AutoGui: {e}");
-        std::process::exit(1);
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("AutoGui: {e}");
+            EXIT_FAILED
+        }
+    }
+}
+
+fn run_runtime(lang: Lang, no_color: bool) -> i32 {
+    // Single-threaded here; the runtime reads these from the environment.
+    unsafe {
+        std::env::set_var("AUTOGUI_LANG", if lang == Lang::Zh { "zh" } else { "en" });
+        if no_color {
+            std::env::set_var("NO_COLOR", "1");
+        }
+    }
+    #[cfg(windows)]
+    match windows::run_cli() {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("autogui-control: {e}");
+            eprintln!("Run autogui-control doctor");
+            EXIT_BLOCKED
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("autogui-control: Windows runtime required");
+        EXIT_BLOCKED
+    }
+}
+
+fn run() -> i32 {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw == ["mcp"] {
+        return run_mcp();
+    }
+    let env_lang = std::env::var("AUTOGUI_LANG").ok();
+    let parsed = match args::parse(&raw) {
+        Ok(p) => p,
+        Err(message) => {
+            let lang = help::resolve_lang(None, env_lang.as_deref(), ui_language());
+            return usage_error(&message, None, raw.iter().any(|a| a == "--json"), lang);
+        }
+    };
+    let lang = help::resolve_lang(parsed.lang.as_deref(), env_lang.as_deref(), ui_language());
+    let no_color = parsed.no_color || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    if parsed.version {
+        print_version(parsed.json);
+        return 0;
+    }
+    let command = parsed.rest.first().map(String::as_str);
+    if parsed.help || command.is_none() || command == Some("help") {
+        let target = if command == Some("help") {
+            parsed.rest.get(1).map(String::as_str)
+        } else if parsed.help {
+            command
+        } else {
+            None
+        };
+        return match target {
+            None => {
+                print!("{}", help::overview(lang, VERSION));
+                0
+            }
+            Some(name) => match help::find(name) {
+                Some(spec) => {
+                    print!("{}", help::command_help(spec, lang));
+                    0
+                }
+                None => usage_error(
+                    &format!("unknown command '{name}'"),
+                    help::suggest(name),
+                    parsed.json,
+                    lang,
+                ),
+            },
+        };
+    }
+    let Some(command) = command else {
+        return EXIT_USAGE;
+    };
+    if !help::is_known(command) {
+        return usage_error(
+            &format!("unknown command '{command}'"),
+            help::suggest(command),
+            parsed.json,
+            lang,
+        );
+    }
+    match command {
+        "doctor" if parsed.rest.len() == 1 => {
+            doctor::run(lang, no_color, parsed.json, parsed.quiet)
+        }
+        "doctor" => usage_error("doctor takes no arguments", None, parsed.json, lang),
+        "mcp" if parsed.rest.len() == 1 => run_mcp(),
+        "mcp" => mcp_cmd::run(&parsed.rest[1..], parsed.json, lang),
+        _ => run_runtime(lang, no_color),
     }
 }
