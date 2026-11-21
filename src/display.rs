@@ -94,8 +94,7 @@ impl Display {
                     "display changed during capture; enumerate again".into(),
                 ));
             }
-            let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
-            Screenshot::new(rgb.width(), rgb.height(), rgb.into_raw())
+            rgba_into_screenshot(rgba)
         }
         #[cfg(not(all(windows, feature = "os")))]
         {
@@ -145,6 +144,20 @@ impl Display {
             "selected display disconnected or changed; enumerate displays again".into(),
         ))
     }
+}
+
+/// Drop the alpha channel in place: no second frame-sized allocation (fresh
+/// pages cost more than the copy) and no per-pixel format dispatch.
+#[cfg_attr(not(all(windows, feature = "os")), allow(dead_code))]
+pub(crate) fn rgba_into_screenshot(rgba: image::RgbaImage) -> Result<Screenshot> {
+    let (width, height) = rgba.dimensions();
+    let mut pixels = rgba.into_raw();
+    let count = pixels.len() / 4;
+    for i in 0..count {
+        pixels.copy_within(i * 4..i * 4 + 3, i * 3);
+    }
+    pixels.truncate(count * 3);
+    Screenshot::new(width, height, pixels)
 }
 
 #[cfg(not(all(windows, feature = "os")))]
@@ -245,6 +258,19 @@ mod tests {
             assert!(!display.contains(point));
         }
     }
+    #[test]
+    fn rgba_conversion_matches_image_crate() {
+        let rgba = image::RgbaImage::from_fn(37, 11, |x, y| {
+            image::Rgba([(x * 7) as u8, (y * 13) as u8, (x ^ y) as u8, (x + y) as u8])
+        });
+        let expected = image::DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
+        let shot = rgba_into_screenshot(rgba).unwrap();
+        assert_eq!((shot.width, shot.height), (37, 11));
+        assert_eq!(shot.pixels, expected.into_raw());
+        let empty = rgba_into_screenshot(image::RgbaImage::new(0, 0)).unwrap();
+        assert!(empty.pixels.is_empty());
+    }
+
     #[test]
     fn invalid_region_is_rejected_before_native_capture() {
         for region in [

@@ -60,3 +60,21 @@ opt-level = 3
 
 [profile.release.package.rustfft]
 opt-level = 3
+
+# PNG encode/decode dominates capture-to-file and template loading. At opt-level
+# 3 these cut display capture -> PNG by ~15% for ~150 KiB of runtime DLL; the
+# rest of the workspace stays at "s" (all-3 was no faster and 25% larger).
+[profile.release.package.image]
+opt-level = 3
+
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.fdeflate]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3
+
+[profile.release.package.crc32fast]
+opt-level = 3
