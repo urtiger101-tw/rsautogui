@@ -672,8 +672,10 @@ mod tests {
     fn confidence_needs_feature() {
         let hay = Screenshot::solid(8, 8, Rgb::new(0, 0, 0));
         let needle = Screenshot::solid(2, 2, Rgb::new(0, 0, 0));
-        let mut opt = LocateOptions::default();
-        opt.confidence = Some(0.9);
+        let opt = LocateOptions {
+            confidence: Some(0.9),
+            ..Default::default()
+        };
         let err = locate_in(&needle, &hay, &opt, true).unwrap_err();
         assert!(matches!(err, Error::FeatureDisabled(_)));
     }

@@ -1,5 +1,5 @@
-use super::errors::result as error_result;
-use super::input::{CaptureProof, drag_path, type_chunks};
+use super::errors::{invalid_arguments, result as error_result};
+use super::input::{CaptureProof, drag_path, sleep_sliced, type_chunks};
 use crate::cli::{active, capture_region, locate_target, scaled_template, screen_region};
 use crate::commands::{display as display_command, session, window as window_command};
 use crate::desktop;
@@ -77,7 +77,7 @@ fn info(window: &Window) -> Result<Value> {
     )
 }
 fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T> {
-    serde_json::from_value(value).map_err(|e| Error::Input(format!("invalid tool arguments: {e}")))
+    serde_json::from_value(value).map_err(invalid_arguments)
 }
 
 #[derive(Deserialize)]
@@ -316,13 +316,31 @@ fn drag_move(
         None => gui.move_to(to.x, to.y, duration, autogui::tweens::linear)?,
         Some(display) => {
             for point in drag_path(from, to, 3) {
-                check()?;
-                std::thread::sleep(duration / 3);
+                // The button is held: keep cancellation and the fail-safe live.
+                sleep_sliced(duration / 3, || {
+                    check()?;
+                    failsafe(gui)
+                })?;
                 gui.move_to_display(display, point)?;
             }
         }
     }
     check()
+}
+
+/// The corner fail-safe on the current cursor position, for waits the
+/// library does not perform itself.
+fn failsafe(gui: &AutoGui) -> Result<()> {
+    let settings = gui.settings();
+    if !settings.failsafe {
+        return Ok(());
+    }
+    let position = gui.position()?;
+    if settings.failsafe_points.contains(&position) {
+        Err(Error::FailSafe(position))
+    } else {
+        Ok(())
+    }
 }
 
 /// Rejects unknown key names using a throwaway fake backend, so validation
@@ -1287,7 +1305,7 @@ mod tests {
             assert!(
                 matches!(
                     s.call(name, args.clone(), &|| Ok(())),
-                    Err(Error::InvalidArgument(_)) | Err(Error::Input(_))
+                    Err(Error::InvalidArgument(_)) | Err(Error::Io(_))
                 ),
                 "{name} {args}"
             );
@@ -1308,15 +1326,11 @@ mod tests {
     #[test]
     fn cancellation_stops_windows_list_before_backend() {
         let mut s = session();
-        let cancelled = || {
-            Err(Error::Input(
-                "request cancelled or client disconnected".into(),
-            ))
-        };
-        assert!(
-            s.call("windows_list", json!({"title":"x"}), &cancelled)
-                .is_err()
-        );
+        let cancelled = || Err(crate::mcp::errors::cancelled());
+        let error = s
+            .call("windows_list", json!({"title":"x"}), &cancelled)
+            .unwrap_err();
+        assert_eq!(report(&error).code, autogui_protocol::ErrorCode::Cancelled);
         assert!(s.gui.is_none());
     }
 
@@ -1350,12 +1364,6 @@ mod tests {
                 )),
                 "raise timeout",
             ),
-            (
-                Error::Io(std::io::Error::other(
-                    "request cancelled or client disconnected",
-                )),
-                "no further input",
-            ),
         ];
         for (error, hint) in cases {
             let text = describe(&error);
@@ -1363,6 +1371,11 @@ mod tests {
             assert!(text.contains("Hint: "), "{text}");
             assert!(text.contains(hint), "{text}");
         }
+        // Typed cancellation: the clean inner message, then the hint.
+        assert_eq!(
+            describe(&crate::mcp::errors::cancelled()),
+            "request cancelled or client disconnected. Hint: request was cancelled or the client disconnected; no further input was sent"
+        );
         for error in [
             Error::InvalidArgument("capture expired; capture again"),
             Error::Io(std::io::Error::other("disk")),
@@ -1398,7 +1411,7 @@ mod tests {
                 true,
             ),
             (
-                Error::Input("invalid tool arguments: unknown field".into()),
+                crate::mcp::errors::invalid_arguments("unknown field"),
                 "invalid_argument",
                 false,
             ),
@@ -1411,9 +1424,11 @@ mod tests {
                 "timeout",
                 true,
             ),
+            (crate::mcp::errors::cancelled(), "cancelled", true),
+            // Wording alone never means cancellation.
             (
                 Error::Input("request cancelled or client disconnected".into()),
-                "cancelled",
+                "input_failed",
                 true,
             ),
             (
@@ -1429,7 +1444,18 @@ mod tests {
             let s = &r["structuredContent"];
             assert_eq!(s["code"], code, "{error}");
             assert_eq!(s["retryable"], retryable, "{error}");
-            assert_eq!(s["message"], error.to_string());
+            // Typed I/O markers report their inner text without "io: ".
+            let message = error.to_string();
+            let expected = match &error {
+                Error::Io(e)
+                    if autogui_protocol::is_cancellation(e)
+                        || e.kind() == std::io::ErrorKind::InvalidInput =>
+                {
+                    e.to_string()
+                }
+                _ => message,
+            };
+            assert_eq!(s["message"], expected);
             assert_eq!(r["content"][0]["text"], describe(&error));
             assert_eq!(s["hint"].is_string(), !report(&error).hint.is_empty());
         }
@@ -1447,6 +1473,26 @@ mod tests {
         .unwrap();
         assert_eq!(r["isError"], true);
         assert_eq!(r["structuredContent"]["code"], "invalid_argument");
+        assert!(s.gui.is_none());
+    }
+
+    #[test]
+    fn argument_decode_errors_are_clean_invalid_arguments() {
+        let mut s = Session::default();
+        let error = s
+            .call("windows_list", json!({"bogus":1}), &|| Ok(()))
+            .unwrap_err();
+        let e = report(&error);
+        assert_eq!(e.code, autogui_protocol::ErrorCode::InvalidArgument);
+        assert!(!e.retryable);
+        assert!(
+            e.message
+                .starts_with("invalid tool arguments: unknown field"),
+            "{}",
+            e.message
+        );
+        assert!(!e.message.contains("input backend") && !e.message.contains("io:"));
+        assert!(e.hint.contains("inputSchema"));
         assert!(s.gui.is_none());
     }
 

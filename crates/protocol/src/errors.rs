@@ -101,6 +101,36 @@ pub struct ToolError {
     pub retryable: bool,
 }
 
+/// Typed marker carried inside an [`std::io::Error`] for a request the
+/// client cancelled, or a state-changing request refused because the client
+/// disconnected. Recognised by type ([`is_cancellation`]), never by message
+/// text, so an unrelated error that mentions "cancelled" keeps its own code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cancellation(String);
+
+impl std::fmt::Display for Cancellation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Cancellation {}
+
+/// An I/O error carrying the [`Cancellation`] marker.
+pub fn cancellation(message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        Cancellation(message.into()),
+    )
+}
+
+/// Whether `error` was made by [`cancellation`].
+pub fn is_cancellation(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<Cancellation>())
+}
+
 const CANCELLED_HINT: &str =
     "request was cancelled or the client disconnected; no further input was sent";
 
@@ -175,7 +205,7 @@ impl ToolError {
     pub fn from_io(error: &std::io::Error) -> Self {
         use std::io::ErrorKind;
         let message = error.to_string();
-        if message.contains("cancelled") {
+        if is_cancellation(error) {
             return Self::cancelled(message);
         }
         if message.contains("autogui_runtime.dll")
@@ -257,8 +287,13 @@ mod tests {
                 ErrorCode::Internal,
             ),
             (
-                Error::other("request cancelled or client disconnected"),
+                cancellation("request cancelled or client disconnected"),
                 ErrorCode::Cancelled,
+            ),
+            // Only the typed marker means cancellation, not the wording.
+            (
+                Error::other("request cancelled or client disconnected"),
+                ErrorCode::Internal,
             ),
             (Error::new(ErrorKind::TimedOut, "late"), ErrorCode::Timeout),
             (Error::new(ErrorKind::NotFound, "gone"), ErrorCode::NotFound),
@@ -272,6 +307,8 @@ mod tests {
         let missing = ToolError::from_io(&Error::other("Cannot load adjacent autogui_runtime.dll"));
         assert!(missing.text().contains("Hint: "));
         assert!(!missing.retryable);
-        assert!(ToolError::from_io(&Error::other("request cancelled")).retryable);
+        assert!(ToolError::from_io(&cancellation("request cancelled")).retryable);
+        assert!(is_cancellation(&cancellation("x")));
+        assert!(!is_cancellation(&Error::new(ErrorKind::Interrupted, "x")));
     }
 }

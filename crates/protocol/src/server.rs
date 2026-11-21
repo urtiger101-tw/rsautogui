@@ -9,8 +9,8 @@ use std::sync::{
     mpsc,
 };
 
-use crate::errors::ToolError;
-use crate::tools::{NAMES, list_result_json};
+use crate::errors::{ToolError, cancellation};
+use crate::tools::{NAMES, list_result_json, read_only};
 
 /// Executes one validated `tools/call` request.
 ///
@@ -22,7 +22,10 @@ pub trait Handler {
 }
 
 const MAX_MESSAGE: usize = 1_048_576;
-const VERSION: &str = "2025-11-25";
+/// Newest MCP protocol version this server speaks (offered when a client
+/// asks for an unknown one).
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
+const VERSION: &str = PROTOCOL_VERSION;
 /// Protocol versions this server negotiates, newest first.
 const SUPPORTED: [&str; 4] = [VERSION, "2025-06-18", "2025-03-26", "2024-11-05"];
 /// First protocol version with `structuredContent` / `outputSchema`. Older
@@ -328,7 +331,54 @@ fn read_message(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
     }
 }
 
+/// The `check` passed to the handler for one request: fails with a typed
+/// [`cancellation`] once the client cancelled this request, or once stdin
+/// reached EOF and the tool is not read-only (`readOnlyHint` in tools.json).
+fn request_check(interrupts: &Interrupts, key: &str, read_only: bool) -> Result<()> {
+    let pending = interrupts
+        .pending
+        .lock()
+        .map_err(|_| Error::other("cancellation state unavailable"))?;
+    if pending.get(key).copied().unwrap_or(false) {
+        return Err(cancellation("request cancelled by the client"));
+    }
+    if !read_only && interrupts.closed.load(Ordering::SeqCst) {
+        return Err(cancellation(
+            "request cancelled: the client disconnected (stdin closed), so state-changing tools no longer run",
+        ));
+    }
+    Ok(())
+}
+
+/// Dispatches one queued message; returns the log notices and the response
+/// to write, in order.
+fn handle<T: Handler>(
+    server: &mut Server<T>,
+    interrupts: &Interrupts,
+    message: Value,
+) -> Vec<Reply> {
+    let key = message["id"].to_string();
+    let read_only = message["method"] == "tools/call"
+        && message["params"]["name"].as_str().is_some_and(read_only);
+    let check = || request_check(interrupts, &key, read_only);
+    let response = server.dispatch(message, &check);
+    interrupts.finish(&key);
+    let mut replies: Vec<Reply> = std::mem::take(&mut server.outbox)
+        .into_iter()
+        .map(Reply::Value)
+        .collect();
+    replies.extend(response);
+    replies
+}
+
 /// Serves MCP over stdin/stdout until EOF.
+///
+/// Requests already read when stdin reaches EOF are still answered, so a
+/// whole session can be piped in. After EOF, read-only tools
+/// (`readOnlyHint: true`) run normally, while every other tool (input,
+/// window or system state changes) is refused, or stops at its next
+/// cancellation check, with error code `cancelled`: nobody is left to
+/// observe or stop the input.
 pub fn run(handler: impl Handler) -> Result<()> {
     let interrupts = Arc::new(Interrupts::default());
     let reader_state = interrupts.clone();
@@ -418,27 +468,8 @@ pub fn run(handler: impl Handler) -> Result<()> {
     });
     let mut server = Server::new(handler);
     for message in receive {
-        let key = message["id"].to_string();
-        let check = || {
-            let pending = interrupts
-                .pending
-                .lock()
-                .map_err(|_| Error::other("cancellation state unavailable"))?;
-            if interrupts.closed.load(Ordering::SeqCst)
-                || pending.get(&key).copied().unwrap_or(false)
-            {
-                Err(Error::other("request cancelled or client disconnected"))
-            } else {
-                Ok(())
-            }
-        };
-        let response = server.dispatch(message, &check);
-        interrupts.finish(&key);
-        for notice in std::mem::take(&mut server.outbox) {
-            write_response(&output, Reply::Value(notice))?;
-        }
-        if let Some(response) = response {
-            write_response(&output, response)?;
+        for reply in handle(&mut server, &interrupts, message) {
+            write_response(&output, reply)?;
         }
     }
     // Dropping tools closes only our managed pause lease; helper restores state.
@@ -650,6 +681,84 @@ mod tests {
             json!({"name":"screensaver","arguments":{"action":"resume"}}),
         );
         assert!(s.outbox.is_empty());
+    }
+    /// Records which tools ran and fails when its check fails, like the
+    /// runtime does at its first cancellation check.
+    #[derive(Default)]
+    struct Recorder {
+        ran: Vec<String>,
+    }
+    impl Handler for Recorder {
+        fn call(&mut self, name: &str, _: Value, check: &dyn Fn() -> Result<()>) -> Result<Value> {
+            check()?;
+            self.ran.push(name.into());
+            Ok(
+                json!({"content":[{"type":"text","text":"{}"}],"structuredContent":{},"isError":false}),
+            )
+        }
+    }
+    fn queued(id: i64, name: &str) -> Value {
+        json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":{}}})
+    }
+    fn only(replies: Vec<Reply>) -> Value {
+        let mut replies = replies.into_iter();
+        let reply = json(replies.next().unwrap());
+        assert!(replies.next().is_none());
+        reply
+    }
+    #[test]
+    fn queued_requests_after_eof_run_read_only_tools_only() {
+        let mut s = Server::<Recorder>::default();
+        ready(&mut s, VERSION);
+        let interrupts = Interrupts::default();
+        interrupts.closed.store(true, Ordering::SeqCst);
+        for (id, name) in [(1, "session_status"), (2, "windows_list")] {
+            interrupts
+                .pending
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), false);
+            let reply = only(handle(&mut s, &interrupts, queued(id, name)));
+            assert_eq!(reply["id"], id);
+            assert_eq!(reply["result"]["isError"], false, "{name}: {reply}");
+        }
+        for (id, name) in [(3, "type_text"), (4, "click_at"), (5, "window_control")] {
+            interrupts
+                .pending
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), false);
+            let reply = only(handle(&mut s, &interrupts, queued(id, name)));
+            let error = &reply["result"]["structuredContent"];
+            assert_eq!(reply["result"]["isError"], true, "{name}");
+            assert_eq!(error["code"], "cancelled", "{name}");
+            assert!(
+                error["message"].as_str().unwrap().contains("disconnected"),
+                "{reply}"
+            );
+        }
+        assert_eq!(s.tools.ran, ["session_status", "windows_list"]);
+        assert!(interrupts.pending.lock().unwrap().is_empty());
+        // Non-tool requests are still answered after EOF.
+        let list = only(handle(
+            &mut s,
+            &interrupts,
+            json!({"jsonrpc":"2.0","id":6,"method":"tools/list"}),
+        ));
+        assert!(list["result"]["tools"].is_array());
+    }
+    #[test]
+    fn cancelled_request_is_refused_even_when_read_only() {
+        let mut s = Server::<Recorder>::default();
+        ready(&mut s, VERSION);
+        let interrupts = Interrupts::default();
+        interrupts.pending.lock().unwrap().insert("1".into(), false);
+        interrupts.cancel(&json!(1));
+        let reply = only(handle(&mut s, &interrupts, queued(1, "session_status")));
+        assert_eq!(reply["result"]["structuredContent"]["code"], "cancelled");
+        let reply = only(handle(&mut s, &interrupts, queued(2, "type_text")));
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        assert_eq!(s.tools.ran, ["type_text"]);
     }
     #[test]
     fn bounded_lines() {

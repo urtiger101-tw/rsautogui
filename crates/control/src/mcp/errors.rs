@@ -2,16 +2,56 @@
 //! shape (`autogui_protocol::ToolError`), used by the runtime DLL and the
 //! in-process `app_control mcp` server alike.
 use autogui::Error;
-use autogui_protocol::{ErrorCode, ToolError};
+use autogui_protocol::{ErrorCode, ToolError, is_cancellation};
 use serde_json::Value;
+
+/// Typed marker for tool arguments that failed to decode (unknown field,
+/// wrong type). Carried as an `io::ErrorKind::InvalidInput` so the public
+/// `autogui::Error` enum stays unchanged while the message stays dynamic.
+#[derive(Debug)]
+struct InvalidToolArguments(String);
+
+impl std::fmt::Display for InvalidToolArguments {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid tool arguments: {}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidToolArguments {}
+
+/// The error for arguments that do not match a tool's `inputSchema`.
+pub(crate) fn invalid_arguments(detail: impl std::fmt::Display) -> Error {
+    Error::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        InvalidToolArguments(detail.to_string()),
+    ))
+}
+
+/// The error a cancellation check returns once the client cancelled the
+/// request or disconnected. Recognised by type, never by its wording.
+pub fn cancelled() -> Error {
+    Error::Io(autogui_protocol::cancellation(
+        "request cancelled or client disconnected",
+    ))
+}
+
+fn is_invalid_arguments(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<InvalidToolArguments>())
+}
 
 /// Stable code, human message, recovery hint and retryability for `error`.
 pub fn report(error: &Error) -> ToolError {
     let message = error.to_string();
-    if message.contains("cancelled") {
-        return ToolError::cancelled(message);
-    }
     let (code, hint) = match error {
+        // The inner text: "io: " would only obscure these messages.
+        Error::Io(e) if is_cancellation(e) => return ToolError::cancelled(e.to_string()),
+        Error::Io(e) if is_invalid_arguments(e) => {
+            return ToolError::new(ErrorCode::InvalidArgument, e.to_string()).with_hint(
+                "check the tool's inputSchema in tools/list; unknown fields are rejected",
+            );
+        }
         Error::WindowNotFound => (
             ErrorCode::WindowNotFound,
             "the window closed or changed identity; re-run windows_list (or window_wait) for fresh targets",
@@ -46,10 +86,6 @@ pub fn report(error: &Error) -> ToolError {
         Error::FeatureDisabled(_) => (
             ErrorCode::Unsupported,
             "install an autogui-control build with this feature enabled",
-        ),
-        Error::Input(m) if m.starts_with("invalid tool arguments") => (
-            ErrorCode::InvalidArgument,
-            "check the tool's inputSchema in tools/list; unknown fields are rejected",
         ),
         Error::Input(_) => (
             ErrorCode::InputFailed,
