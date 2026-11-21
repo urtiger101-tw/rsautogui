@@ -21,21 +21,27 @@ function StartMcp([string]$Path) {
     $process.StartInfo=$start
     [void]$process.Start()
     $stderr=$process.StandardError.ReadToEndAsync()
-    @{Process=$process;ErrorTask=$stderr;Next=0}
+    @{Process=$process;ErrorTask=$stderr;Next=0;Notifications=@();Last=$null}
 }
 function Send($Client,$Message) { $Client.Process.StandardInput.WriteLine(($Message | ConvertTo-Json -Depth 15 -Compress));$Client.Process.StandardInput.Flush() }
 function Receive($Client) {
-    $read=$Client.Process.StandardOutput.ReadLineAsync()
-    Assert ($read.Wait(15000)) 'MCP response timeout'
-    $line=$read.Result
-    Assert ($null -ne $line) 'MCP closed unexpectedly'
-    $line | ConvertFrom-Json
+    while ($true) {
+        $read=$Client.Process.StandardOutput.ReadLineAsync()
+        Assert ($read.Wait(15000)) 'MCP response timeout'
+        $line=$read.Result
+        Assert ($null -ne $line) 'MCP closed unexpectedly'
+        $message=$line | ConvertFrom-Json
+        # Servers may interleave notifications (e.g. notifications/message); clients skip them.
+        if ($null -ne $message.method -and $null -eq $message.id) { $Client.Notifications += ,$message; continue }
+        $Client.Last=$line
+        return $message
+    }
 }
 function Request($Client,[string]$Method,$Params) {
     $Client.Next++
     Send $Client @{jsonrpc='2.0';id=$Client.Next;method=$Method;params=$Params}
     $response=Receive $Client
-    Assert ($response.id -eq $Client.Next) 'Unexpected response id (stdout contamination?)'
+    Assert ($response.id -eq $Client.Next) "Unexpected response id for $Method (stdout contamination?): $($Client.Last)"
     $response
 }
 function Initialize($Client,[string]$Version='2025-11-25') {
