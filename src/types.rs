@@ -83,6 +83,13 @@ impl Rect {
     }
 }
 
+impl From<Rect> for (i32, i32, i32, i32) {
+    /// PyAutoGUI region tuple `(left, top, width, height)`.
+    fn from(r: Rect) -> Self {
+        (r.left, r.top, r.width, r.height)
+    }
+}
+
 pub fn center(b: Rect) -> Point {
     Point::new(b.left + b.width / 2, b.top + b.height / 2)
 }
