@@ -18,7 +18,7 @@
 - CLI help is bilingual (English and Traditional Chinese) via `help <command>` or `<command> --help`, with "did you mean" suggestions for mistyped commands.
 - MCP: tool `title` and `outputSchema`; `structuredContent` alongside the JSON text block (the text block is always kept); structured errors with the codes `invalid_argument`, `window_not_found`, `image_not_found`, `not_found`, `fail_safe`, `permission_denied`, `timeout`, `cancelled`, `unsupported`, `input_failed`, `capture_failed`, `runtime_unavailable` and `internal`; `serverInfo.title`; the `logging` capability with `logging/setLevel`; screensaver lease notifications through `notifications/message`; empty `resources/list`, `resources/templates/list` and `prompts/list`.
 - Library: `autogui::prelude` for common imports; `From<Rect>` for `(i32, i32, i32, i32)`.
-- Installer: `claude-desktop` MCP host (`%APPDATA%\Claude\claude_desktop_config.json`, key `mcpServers.autogui`) in `install.ps1`, and the Inno Setup task `mcp\claude-desktop`. It is MCP-only.
+- Installer: `claude-desktop` MCP host (`%APPDATA%\Claude\claude_desktop_config.json`, key `mcpServers.autogui`) in `install.ps1`, and the Inno Setup task `mcp\claudedesktop`. It is MCP-only.
 - Packaging: `scripts/package.ps1` fails when the five workspace manifests have different versions, and ships `docs/performance.md`.
 
 ### Changed

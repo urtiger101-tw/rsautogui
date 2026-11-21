@@ -41,7 +41,7 @@ Codex 的 MCP 安裝需要本機 Codex CLI；其餘宿主只寫設定檔。JSONC
 
 互動安裝時，「Install Skill for」有 Codex、Claude Code、OpenCode、AGY App／CLI 四個選項；「Register MCP server for」另有 Claude Desktop 選項，預設都不勾選，即只安裝程式。
 
-靜默安裝時，任務名稱為 `skill\codex`、`skill\claude`、`skill\opencode`、`skill\agy`、`mcp\codex`、`mcp\claude`、`mcp\claude-desktop`、`mcp\opencode`、`mcp\agy`，以逗號放在 `/TASKS` 中；省略 `/TASKS` 即只安裝程式。
+靜默安裝時，任務名稱為 `skill\codex`、`skill\claude`、`skill\opencode`、`skill\agy`、`mcp\codex`、`mcp\claude`、`mcp\claudedesktop`、`mcp\opencode`、`mcp\agy`，以逗號放在 `/TASKS` 中；省略 `/TASKS` 即只安裝程式。
 
 ```powershell
 # 只安裝程式
