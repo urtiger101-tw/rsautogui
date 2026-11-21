@@ -12,6 +12,10 @@ param(
     [string]$ClaudeDesktopConfig,
     [string]$AgyConfig,
     [string]$AgySkillRoot,
+    # Codex CLI to use for MCP registration; default: probe PATH and the standard install location.
+    [string]$CodexPath,
+    # Setup passes a file here; warnings (for example a skipped host) are written to it for display.
+    [string]$WarningFile,
     [switch]$NonInteractive,
     [switch]$Preview
 )
@@ -22,6 +26,8 @@ $package = $PSScriptRoot
 function Full([string]$Path) { [IO.Path]::GetFullPath($Path) }
 function WriteUtf8([string]$Path, [string]$Text) { [IO.File]::WriteAllText($Path, $Text, $utf8) }
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+$warnings = New-Object System.Collections.ArrayList
+function Warn([string]$Message) { Write-Warning $Message; [void]$warnings.Add($Message) }
 function Hosts([string[]]$Items) {
     @($Items | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
 }
@@ -90,28 +96,67 @@ foreach ($root in @($selectedRoots | Select-Object -Unique)) {
 }
 if (-not ('AutoGuiJson' -as [type])) { Add-Type -Path (Join-Path $package 'ConfigEditor.cs') }
 $changes = New-Object System.Collections.ArrayList
+# Every codex executable that might be the real CLI, in order: an explicit -CodexPath only;
+# otherwise the current PATH, the persisted machine and user PATH (Setup started from
+# Explorer can inherit a stale PATH), then the standard per-user install location.
+function CodexCandidates {
+    if ($CodexPath) { return @(Full $CodexPath) }
+    $found = New-Object System.Collections.ArrayList
+    foreach ($command in @(Get-Command codex -All -CommandType Application -ErrorAction SilentlyContinue)) { [void]$found.Add($command.Source) }
+    $persisted = @([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User')) | Where-Object { $_ }
+    foreach ($directory in @(($persisted -join ';') -split ';' | Where-Object { $_.Trim() })) {
+        foreach ($leaf in @('codex.exe','codex.cmd')) {
+            try { $candidate = Join-Path ([Environment]::ExpandEnvironmentVariables($directory.Trim())) $leaf } catch { continue }
+            [void]$found.Add($candidate)
+        }
+    }
+    $localData = if ($HomeDirectory -eq $env:USERPROFILE -and $env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HomeDirectory 'AppData\Local' }
+    [void]$found.Add((Join-Path $localData 'Programs\OpenAI\Codex\bin\codex.exe'))
+    @($found | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | ForEach-Object { Full $_ } | Select-Object -Unique)
+}
+# Runs one codex CLI with CODEX_HOME pointed at the selected profile. Never throws: a
+# launcher shim that cannot start, or stderr output under ErrorActionPreference=Stop,
+# is reported as a failed run. Output can contain user data, so it is never logged.
+function InvokeCodex([string]$Command, [string[]]$Arguments) {
+    $previous = $env:CODEX_HOME
+    $ErrorActionPreference = 'Continue'
+    try {
+        $env:CODEX_HOME = Full $CodexHome
+        $global:LASTEXITCODE = 0
+        $lines = @(& $Command @Arguments 2>&1)
+        $stdout = ($lines | Where-Object { $_ -isnot [Management.Automation.ErrorRecord] } | Out-String)
+        return @{Ok=($LASTEXITCODE -eq 0); Output=$stdout}
+    } catch {
+        return @{Ok=$false; Output=''}
+    } finally { $env:CODEX_HOME = $previous }
+}
 $codexCommand = $null
-foreach ($name in $McpHosts) {
+$codexHint = "Register it later with: codex mcp add autogui -- `"$exe`" mcp"
+foreach ($name in @($McpHosts)) {
     $path = Full $configs[$name]
     $before = if (Test-Path -LiteralPath $path) { [IO.File]::ReadAllText($path) } else { '{}' }
     if ($name -eq 'codex') {
-        $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
-        if (-not $codexCommand) {
-            # Setup launched from Explorer inherits its possibly stale PATH; reread the persisted machine and user PATH.
-            $env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), $env:Path) | Where-Object { $_ }) -join ';'
-            $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+        # Codex is optional: a missing or broken CLI skips only Codex, never the whole installation.
+        $candidates = @(CodexCandidates)
+        $existing = $false
+        foreach ($candidate in $candidates) {
+            # Read-only preflight; the first CLI that lists the config as JSON is the real one.
+            $run = InvokeCodex $candidate @('mcp','list','--json')
+            if (-not $run.Ok -or $run.Output.Trim() -notmatch '^[\[{]') { continue }
+            try { $entries = $run.Output | ConvertFrom-Json } catch { continue }
+            $codexCommand = $candidate
+            $existing = [bool]@($entries | Where-Object { $_ -and $_.PSObject.Properties['name'] -and $_.name -eq 'autogui' }).Count
+            break
         }
-        if (-not $codexCommand) { throw 'Codex MCP registration needs the codex CLI on PATH. Install Codex or deselect the Codex MCP option.' }
-        $previous = $env:CODEX_HOME
-        try {
-            $env:CODEX_HOME = Full $CodexHome
-            # Read-only preflight; output can contain user data, so never log it.
-            $listing = (& $codexCommand.Source mcp list --json 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0) { throw 'Codex config could not be read. Fix it before installation.' }
-            $entries = $listing | ConvertFrom-Json
-            if (@($entries | Where-Object { $_.name -eq 'autogui' }).Count) { throw 'Codex already has an autogui MCP server; preserved.' }
-        } finally { $env:CODEX_HOME = $previous }
-        $updated = $null
+        if (-not $codexCommand) {
+            $tried = if ($candidates.Count) { 'tried: ' + ($candidates -join ', ') } else { 'none found on PATH or in the standard location' }
+            Warn "Codex MCP not registered: no working codex CLI ($tried). If Codex is installed, its config.toml may be invalid. $codexHint"
+        } elseif ($existing) {
+            Warn 'Codex already has an autogui MCP server; it was left unchanged.'
+        } else {
+            [void]$changes.Add(@{Host=$name; Path=$path; Text=$null; BeforeHash=$(if (Test-Path -LiteralPath $path) { Hash $path } else { $null })})
+        }
+        continue
     } else {
         # Normalize only the parse input; the existing file is backed up as bytes.
         if ([string]::IsNullOrWhiteSpace($before)) { $before = '{}' }
@@ -122,9 +167,15 @@ foreach ($name in $McpHosts) {
     [void]$changes.Add(@{Host=$name; Path=$path; Text=$updated; BeforeHash=$(if (Test-Path -LiteralPath $path) { Hash $path } else { $null })})
 }
 Write-Host "Program: $InstallDir"
+# The manifest lists only hosts this installation actually configures.
+$McpHosts = @($McpHosts | Where-Object { $_ -ne 'codex' -or @($changes | Where-Object { $_.Host -eq 'codex' }).Count })
+function SaveWarnings {
+    if ($WarningFile -and $warnings.Count) { WriteUtf8 (Full $WarningFile) (($warnings.ToArray()) -join "`r`n") }
+}
 Write-Host "Skills: $($SkillHosts -join ', ')   MCP: $($McpHosts -join ', ')"
 foreach ($change in $changes) { Write-Host "MCP config: $($change.Path)" }
-if ($Preview) { Write-Host 'Preview only; no install/config writes.'; return }
+if ($codexCommand) { Write-Host "Codex CLI: $codexCommand" }
+if ($Preview) { SaveWarnings; Write-Host 'Preview only; no install/config writes.'; return }
 
 $records = New-Object System.Collections.ArrayList
 $backupDir = Join-Path $InstallDir '.install\backups'
@@ -150,15 +201,20 @@ try {
             Copy-Item -LiteralPath $change.Path -Destination $backup
         }
         New-Item -ItemType Directory -Path (Split-Path -Parent $change.Path) -Force | Out-Null
+        if ($change.Host -eq 'codex') {
+            $run = InvokeCodex $codexCommand @('mcp','add','autogui','--',$exe,'mcp')
+            $after = if (Test-Path -LiteralPath $change.Path) { Hash $change.Path } else { $null }
+            if (-not $run.Ok -and $after -eq $current) {
+                # Nothing was written: skip Codex only and keep the rest of the installation.
+                if ($backup) { Remove-Item -LiteralPath $backup -Force }
+                $McpHosts = @($McpHosts | Where-Object { $_ -ne 'codex' })
+                Warn "Codex MCP not registered: '$codexCommand mcp add' failed. $codexHint"
+                continue
+            }
+            if (-not $run.Ok) { throw 'Codex MCP registration failed after changing config.toml; rolling back.' }
+        }
         try {
-            if ($change.Host -eq 'codex') {
-                $previous = $env:CODEX_HOME
-                try {
-                    $env:CODEX_HOME = Full $CodexHome
-                    $null = & $codexCommand.Source mcp add autogui -- $exe mcp 2>&1
-                    if ($LASTEXITCODE -ne 0) { throw 'Codex MCP registration failed.' }
-                } finally { $env:CODEX_HOME = $previous }
-            } else { WriteUtf8 $change.Path $change.Text }
+            if ($change.Host -ne 'codex') { WriteUtf8 $change.Path $change.Text }
         } finally {
             if (Test-Path -LiteralPath $change.Path) {
                 [void]$records.Add(@{path=$change.Path;sha256=(Hash $change.Path);backup=$backup})
@@ -166,6 +222,8 @@ try {
             }
         }
     }
+    SaveManifest
+    SaveWarnings
     Write-Host 'Installed. Restart selected agents to discover the Skill/MCP tools.'
     Write-Host "Run: & '$exe' --help"
     Write-Host "Uninstall: & '$InstallDir\uninstall.ps1'"

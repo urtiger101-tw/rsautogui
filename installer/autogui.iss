@@ -161,14 +161,17 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  Arguments, SkillHosts, McpHosts: String;
+  Arguments, SkillHosts, McpHosts, WarningFile: String;
+  Warnings: AnsiString;
   ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
     SkillHosts := SelectedHosts('skill');
     McpHosts := SelectedHosts('mcp');
-    Arguments := '-NonInteractive -InstallDir "' + ExpandConstant('{app}') + '"';
+    // install.ps1 writes skipped-host warnings (for example no working codex CLI) here.
+    WarningFile := ExpandConstant('{tmp}\install-warnings.txt');
+    Arguments := '-NonInteractive -InstallDir "' + ExpandConstant('{app}') + '" -WarningFile "' + WarningFile + '"';
     if SkillHosts <> '' then Arguments := Arguments + ' -SkillHosts "' + SkillHosts + '"';
     if McpHosts <> '' then Arguments := Arguments + ' -McpHosts "' + McpHosts + '"';
     if (not RunPackageScript(ExpandConstant('{tmp}\pkg\install.ps1'), Arguments, ResultCode)) or (ResultCode <> 0) then
@@ -176,6 +179,12 @@ begin
       InstallFailed := True;
       SuppressibleMsgBox('AutoGui program installation failed. Setup log: ' + ExpandConstant('{log}'),
         mbCriticalError, MB_OK, IDOK);
+    end
+    else if FileExists(WarningFile) and LoadStringFromFile(WarningFile, Warnings) then
+    begin
+      Log('install.ps1 warnings: ' + String(Warnings));
+      SuppressibleMsgBox('AutoGui was installed, with these notes:' + #13#10#13#10 + String(Warnings),
+        mbInformation, MB_OK, IDOK);
     end;
   end;
 end;

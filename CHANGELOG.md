@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Installer: Codex MCP registration no longer stops the whole installation. It tries every codex CLI on PATH, then the persisted machine and user PATH, then `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`, and uses the first one that can read the Codex config, so a launcher shim that cannot run is skipped. If no CLI works, `codex mcp add` fails without writing, or Codex already has an `autogui` entry, only Codex is skipped; Setup finishes and shows the note with the command to register later. `install.ps1 -CodexPath` selects a CLI explicitly.
+
 ## 0.2.0 — 2026-11-21
 
 ### Highlights
