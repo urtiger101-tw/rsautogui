@@ -57,7 +57,13 @@ pub(crate) fn run(args: &[String]) -> autogui::Result<()> {
     let window = unique_window(&mut gui, &args[1])?;
     apply(&window, &args[0], pair)?;
     if args[0] == "close" {
-        println!("已送出 WM_CLOSE；應用程式可能顯示儲存確認，並不代表已退出。");
+        println!(
+            "{}",
+            crate::cli::lang::tr!(
+                "WM_CLOSE sent; the app may show a save prompt, so this does not mean it exited.",
+                "已送出 WM_CLOSE；應用程式可能顯示儲存確認，並不代表已退出。"
+            )
+        );
     } else {
         println!(
             "{}\t{:?}\t{}\tactive={} minimized={} maximized={}",

@@ -14,6 +14,7 @@ pub(crate) struct DisplayFact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(all(windows, feature = "os")), allow(dead_code))]
 pub(crate) enum Probe {
     /// Real pixels were read; `uniform` means every pixel had the same value.
     Captured {
@@ -156,6 +157,7 @@ pub(crate) fn ready(findings: &[Finding]) -> bool {
     !findings.iter().any(|f| f.level == Level::Blocker)
 }
 
+#[cfg_attr(not(all(windows, feature = "os")), allow(dead_code))]
 fn uniform(pixels: &[u8]) -> bool {
     pixels.as_chunks::<3>().0.iter().all(|p| p == &pixels[..3])
 }
@@ -331,56 +333,110 @@ pub(crate) fn to_json(facts: &Facts, findings: &[Finding]) -> Value {
     })
 }
 
-fn print(facts: &Facts, findings: &[Finding]) {
+/// Human-readable status lines in English or Traditional Chinese.
+pub(crate) fn render(facts: &Facts, findings: &[Finding], zh: bool) -> Vec<String> {
+    let t = |en: &str, zhs: &str| if zh { zhs.to_string() } else { en.to_string() };
     let opt = |v: Option<u32>| v.map_or("unknown".to_string(), |v| v.to_string());
-    println!(
-        "工作階段：{}（主控台工作階段 {}；遠端桌面：{}；連線狀態：{}）",
-        opt(facts.session_id),
-        opt(facts.console_session_id),
-        facts.remote,
-        facts.connect_state.unwrap_or("unknown")
-    );
-    println!(
-        "鎖定：{}",
-        facts.locked.map_or("unknown".into(), |v| v.to_string())
-    );
-    match &facts.input_desktop {
-        Ok(d) => println!("輸入桌面：{d}"),
-        Err(e) => println!("輸入桌面：無法讀取（{e}）"),
-    }
-    println!("游標存取：{}", facts.cursor);
-    match &facts.displays {
-        Ok(all) if all.is_empty() => println!("顯示器：無活動輸出"),
-        Ok(all) => {
-            for d in all {
-                println!("顯示器：{}\t{:?}\tprimary={}", d.name, d.bounds, d.primary);
+    let mut out = Vec::new();
+    let state = facts.connect_state.unwrap_or("unknown");
+    out.push(if zh {
+        format!(
+            "工作階段：{}（主控台工作階段 {}；遠端桌面：{}；連線狀態：{state}）",
+            opt(facts.session_id),
+            opt(facts.console_session_id),
+            facts.remote
+        )
+    } else {
+        format!(
+            "Session: {} (console session {}; remote desktop: {}; connection: {state})",
+            opt(facts.session_id),
+            opt(facts.console_session_id),
+            facts.remote
+        )
+    });
+    let locked = facts
+        .locked
+        .map_or("unknown".to_string(), |v| v.to_string());
+    out.push(format!("{}{locked}", t("Locked: ", "鎖定：")));
+    out.push(match &facts.input_desktop {
+        Ok(d) => format!("{}{d}", t("Input desktop: ", "輸入桌面：")),
+        Err(e) => {
+            if zh {
+                format!("輸入桌面：無法讀取（{e}）")
+            } else {
+                format!("Input desktop: unreadable ({e})")
             }
         }
-        Err(e) => println!("顯示器：無法列舉（{e}）"),
-    }
-    match &facts.capture {
-        Some(Probe::Captured { uniform }) => {
-            println!("主螢幕截圖探測：成功（單一顏色：{uniform}）")
+    });
+    out.push(format!(
+        "{}{}",
+        t("Cursor access: ", "游標存取："),
+        facts.cursor
+    ));
+    match &facts.displays {
+        Ok(all) if all.is_empty() => {
+            out.push(t("Displays: no active output", "顯示器：無活動輸出"))
         }
-        Some(Probe::Failed(e)) => println!("主螢幕截圖探測：失敗（{e}）"),
-        None => println!("主螢幕截圖探測：未執行"),
+        Ok(all) => {
+            for d in all {
+                out.push(format!(
+                    "{}{}\t{:?}\tprimary={}",
+                    t("Display: ", "顯示器："),
+                    d.name,
+                    d.bounds,
+                    d.primary
+                ));
+            }
+        }
+        Err(e) => out.push(if zh {
+            format!("顯示器：無法列舉（{e}）")
+        } else {
+            format!("Displays: cannot enumerate ({e})")
+        }),
     }
+    out.push(match &facts.capture {
+        Some(Probe::Captured { uniform }) => {
+            if zh {
+                format!("主螢幕截圖探測：成功（單一顏色：{uniform}）")
+            } else {
+                format!("Primary capture probe: ok (single color: {uniform})")
+            }
+        }
+        Some(Probe::Failed(e)) => {
+            if zh {
+                format!("主螢幕截圖探測：失敗（{e}）")
+            } else {
+                format!("Primary capture probe: failed ({e})")
+            }
+        }
+        None => t("Primary capture probe: not run", "主螢幕截圖探測：未執行"),
+    });
     for f in findings {
         let tag = if f.level == Level::Blocker {
-            "阻擋"
+            t("blocker", "阻擋")
         } else {
-            "注意"
+            t("warning", "注意")
         };
-        println!("[{tag}] {}: {}", f.code, f.advice);
+        out.push(format!("[{tag}] {}: {}", f.code, f.advice));
     }
-    println!(
-        "{}",
-        if ready(findings) {
-            "結論：可無人值守操作（仍須以實際 App 截圖確認）"
-        } else {
-            "結論：目前不可無人值守操作"
-        }
-    );
+    out.push(if ready(findings) {
+        t(
+            "Verdict: unattended automation is possible (still confirm with a real app screenshot)",
+            "結論：可無人值守操作（仍須以實際 App 截圖確認）",
+        )
+    } else {
+        t(
+            "Verdict: not ready for unattended automation",
+            "結論：目前不可無人值守操作",
+        )
+    });
+    out
+}
+
+fn print(facts: &Facts, findings: &[Finding]) {
+    for line in render(facts, findings, crate::cli::lang::zh()) {
+        println!("{line}");
+    }
 }
 
 /// `session status [--json]`. Exits non-zero when a blocker exists so scripts
@@ -546,5 +602,15 @@ mod tests {
             let args: Vec<String> = bad.into_iter().map(String::from).collect();
             assert!(matches!(run(&args), Err(Error::InvalidArgument(_))));
         }
+    }
+
+    #[test]
+    fn english_status_has_no_cjk_and_chinese_does() {
+        let facts = healthy();
+        let findings = assess(&facts);
+        let en = render(&facts, &findings, false).join("\n");
+        assert!(!en.chars().any(|c| c as u32 > 0x2e80), "{en}");
+        let zh = render(&facts, &findings, true).join("\n");
+        assert!(zh.contains("工作階段"));
     }
 }

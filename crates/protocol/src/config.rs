@@ -67,54 +67,112 @@ fn json_server(container: &str, fields: &[(&str, String)]) -> String {
     )
 }
 
-/// Returns the configuration text that registers `exe` with `host`.
+/// A host snippet split into machine-usable parts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnippetParts {
+    /// Where the snippet goes (a path or location), when the host has one.
+    pub file: Option<String>,
+    /// The snippet alone: JSON, TOML or Python, with no comment lines.
+    pub snippet: String,
+    /// A one-line shell command that registers the server instead, if any.
+    pub command: Option<String>,
+}
+
+impl Host {
+    /// The name accepted by `--host`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::ClaudeDesktop => "claude-desktop",
+            Self::Codex => "codex",
+            Self::OpenAiAgents => "openai-agents",
+            Self::OpenCode => "opencode",
+            Self::Agy => "agy",
+        }
+    }
+}
+
+/// Returns the snippet that registers `exe` with `host`, split into parts.
 ///
-/// Print-only: the text names the file to edit (or the command to run) in
-/// `#` comment lines and never touches the file system. The server is
-/// registered as `autogui` and started as `<exe> mcp` over stdio.
-pub fn snippet(host: Host, exe: &Path) -> Result<String, String> {
+/// Print-only: never touches the file system. The server is registered as
+/// `autogui` and started as `<exe> mcp` over stdio.
+pub fn snippet_parts(host: Host, exe: &Path) -> Result<SnippetParts, String> {
     let exe = exe.to_str().ok_or("executable path is not valid Unicode")?;
     let command = json_string(exe)?;
     let args = r#"["mcp"]"#.to_string();
+    let parts = |file: &str, snippet: String, command: Option<String>| SnippetParts {
+        file: (!file.is_empty()).then(|| file.to_string()),
+        snippet,
+        command,
+    };
     Ok(match host {
-        Host::ClaudeCode => format!(
-            "# Claude Code: run once (user scope)\nclaude mcp add --scope user autogui -- \"{exe}\" mcp\n\n# Or the equivalent entry for ~/.claude.json or a project .mcp.json:\n{}",
+        Host::ClaudeCode => parts(
+            "~/.claude.json or a project .mcp.json",
             json_server(
                 "mcpServers",
                 &[
                     ("type", r#""stdio""#.into()),
                     ("command", command),
                     ("args", args),
-                ]
-            )
+                ],
+            ),
+            Some(format!(
+                "claude mcp add --scope user autogui -- \"{exe}\" mcp"
+            )),
         ),
-        Host::ClaudeDesktop => format!(
-            "# Claude Desktop: merge into %APPDATA%\\Claude\\claude_desktop_config.json, then restart Claude Desktop\n{}",
-            json_server("mcpServers", &[("command", command), ("args", args)])
+        Host::ClaudeDesktop => parts(
+            "%APPDATA%\\Claude\\claude_desktop_config.json",
+            json_server("mcpServers", &[("command", command), ("args", args)]),
+            None,
         ),
-        Host::Codex => format!(
-            "# Codex: add to ~/.codex/config.toml (%USERPROFILE%\\.codex\\config.toml)\n[mcp_servers.autogui]\ncommand = {}\nargs = [\"mcp\"]\n",
-            toml_string(exe)
+        Host::Codex => parts(
+            "~/.codex/config.toml (%USERPROFILE%\\.codex\\config.toml)",
+            format!(
+                "[mcp_servers.autogui]\ncommand = {}\nargs = [\"mcp\"]\n",
+                toml_string(exe)
+            ),
+            None,
         ),
-        Host::OpenAiAgents => format!(
-            "# OpenAI Agents SDK (pip install openai-agents)\nfrom agents import Agent\nfrom agents.mcp import MCPServerStdio\n\n\nasync def desktop_agent():\n    async with MCPServerStdio(\n        name=\"autogui\",\n        params={{\"command\": {command}, \"args\": [\"mcp\"]}},\n        client_session_timeout_seconds=60,\n    ) as autogui:\n        return Agent(name=\"Desktop\", mcp_servers=[autogui])\n"
+        Host::OpenAiAgents => parts(
+            "",
+            format!(
+                "from agents import Agent\nfrom agents.mcp import MCPServerStdio\n\n\nasync def desktop_agent():\n    async with MCPServerStdio(\n        name=\"autogui\",\n        params={{\"command\": {command}, \"args\": [\"mcp\"]}},\n        client_session_timeout_seconds=60,\n    ) as autogui:\n        return Agent(name=\"Desktop\", mcp_servers=[autogui])\n"
+            ),
+            None,
         ),
-        Host::OpenCode => format!(
-            "# OpenCode: merge into ~/.config/opencode/opencode.json\n{}",
+        Host::OpenCode => parts(
+            "~/.config/opencode/opencode.json",
             json_server(
                 "mcp",
                 &[
                     ("type", r#""local""#.into()),
                     ("command", format!("[{command}, \"mcp\"]")),
                     ("enabled", "true".into()),
-                ]
-            )
+                ],
+            ),
+            None,
         ),
-        Host::Agy => format!(
-            "# Antigravity (agy): merge into ~/.gemini/config/mcp_config.json\n{}",
-            json_server("mcpServers", &[("command", command), ("args", args)])
+        Host::Agy => parts(
+            "~/.gemini/config/mcp_config.json",
+            json_server("mcpServers", &[("command", command), ("args", args)]),
+            None,
         ),
     })
+}
+
+/// Legacy single-string form: `#` comment lines naming the file/command,
+/// then the snippet. Prefer [`snippet_parts`].
+pub fn snippet(host: Host, exe: &Path) -> Result<String, String> {
+    let parts = snippet_parts(host, exe)?;
+    let mut out = String::new();
+    if let Some(file) = &parts.file {
+        out.push_str(&format!("# {}: {file}\n", host.name()));
+    }
+    if let Some(command) = &parts.command {
+        out.push_str(&format!("# Or run once:\n{command}\n\n"));
+    }
+    out.push_str(&parts.snippet);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -187,6 +245,26 @@ mod tests {
             let value: serde_json::Value = serde_json::from_str(&body(&text)).unwrap();
             assert_eq!(value, expected, "{host:?}");
         }
+    }
+
+    #[test]
+    fn parts_hold_clean_snippets() {
+        for host in [
+            Host::ClaudeCode,
+            Host::ClaudeDesktop,
+            Host::OpenCode,
+            Host::Agy,
+        ] {
+            let parts = snippet_parts(host, Path::new(EXE)).unwrap();
+            assert!(serde_json::from_str::<serde_json::Value>(&parts.snippet).is_ok());
+            assert!(!parts.snippet.starts_with('#'));
+        }
+        let code = snippet_parts(Host::ClaudeCode, Path::new(EXE)).unwrap();
+        assert!(
+            code.command
+                .is_some_and(|c| c.starts_with("claude mcp add"))
+        );
+        assert_eq!(Host::Agy.name().parse::<Host>(), Ok(Host::Agy));
     }
 
     #[test]

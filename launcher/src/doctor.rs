@@ -619,10 +619,12 @@ pub fn check_host(
         Registration::Entry(command) => {
             let path = Path::new(command);
             if !path.is_file() {
+                // A stale registration is a warning: another tool's host
+                // config must not make doctor fail.
                 check(
                     &id,
                     label,
-                    Status::Fail,
+                    Status::Warn,
                     tr(
                         lang,
                         &format!("registered command is missing: {command}"),
@@ -841,6 +843,34 @@ pub fn render_json(checks: &[Check]) -> Value {
     })
 }
 
+/// Word wrap that never splits a path-like token (it may overflow instead).
+fn wrap_keep_paths(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ').filter(|w| !w.is_empty()) {
+        let atomic = word.contains('\\') || word.contains('/');
+        let pieces: Vec<String> = if atomic || display_width(word) <= width {
+            vec![word.to_string()]
+        } else {
+            wrap(word, width)
+        };
+        for piece in pieces {
+            let sep = usize::from(!line.is_empty());
+            if !line.is_empty() && display_width(&line) + sep + display_width(&piece) > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(&piece);
+        }
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 pub fn render_table(checks: &[Check], lang: Lang, ascii: bool, quiet: bool) -> String {
     let marker = |s: Status| match (s, ascii) {
         (Status::Ok, false) => "✔",
@@ -861,7 +891,7 @@ pub fn render_table(checks: &[Check], lang: Lang, ascii: bool, quiet: bool) -> S
     let mut out = String::new();
     for c in checks.iter().filter(|c| !(quiet && c.status == Status::Ok)) {
         let pad = " ".repeat(label_w.saturating_sub(display_width(&c.label)));
-        let lines = wrap(&c.detail, 78usize.saturating_sub(detail_col).max(20));
+        let lines = wrap_keep_paths(&c.detail, 78usize.saturating_sub(detail_col).max(20));
         for (i, line) in lines.iter().enumerate() {
             if i == 0 {
                 let m = marker(c.status);
@@ -872,7 +902,7 @@ pub fn render_table(checks: &[Check], lang: Lang, ascii: bool, quiet: bool) -> S
             }
         }
         if !c.advice.is_empty() && c.status != Status::Ok {
-            for line in wrap(
+            for line in wrap_keep_paths(
                 &format!("-> {}", c.advice),
                 78usize.saturating_sub(detail_col).max(20),
             ) {
@@ -979,7 +1009,8 @@ pub fn gather(lang: Lang) -> Vec<Check> {
 
 /// Prints the report and returns the exit code (0, or 5 when any check failed).
 pub fn run(lang: Lang, no_color: bool, json: bool, quiet: bool) -> i32 {
-    let checks = gather(lang);
+    // JSON stays English and stable; ids identify checks.
+    let checks = gather(if json { Lang::En } else { lang });
     if json {
         println!("{}", render_json(&checks));
     } else {
@@ -1120,6 +1151,21 @@ mod tests {
     }
 
     #[test]
+    fn long_paths_are_not_split_in_the_table() {
+        let path =
+            r"C:\Users\someone\AppData\Local\Programs\autogui\autogui-control-with-a-long-name.exe";
+        let c = check(
+            "p",
+            "Path".into(),
+            Status::Warn,
+            format!("command is missing: {path}"),
+            String::new(),
+        );
+        let text = render_table(&[c], Lang::En, true, false);
+        assert!(text.contains(path), "{text}");
+    }
+
+    #[test]
     fn host_registration_from_fixture_files() {
         let dir = temp("hosts");
         let exe = dir.join("autogui-control.exe");
@@ -1178,12 +1224,12 @@ mod tests {
         let checks = host_checks(&env, &exe, Lang::En);
         let status = |id: &str| checks.iter().find(|c| c.id == id).map(|c| c.status);
         assert_eq!(status("host.claude-code"), Some(Status::Ok));
-        assert_eq!(status("host.claude-desktop"), Some(Status::Fail));
+        assert_eq!(status("host.claude-desktop"), Some(Status::Warn));
         assert_eq!(status("host.codex"), Some(Status::Warn));
         assert_eq!(status("host.opencode"), Some(Status::Ok));
         assert_eq!(status("host.agy"), Some(Status::Warn));
         assert_eq!(status("skill"), Some(Status::Ok));
-        assert_eq!(exit_code(&checks), 5);
+        assert_eq!(exit_code(&checks), 0);
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -6,22 +6,27 @@ pub(crate) struct Globals {
     pub quiet: bool,
 }
 
-/// Removes --json, --quiet, --no-color and --lang <v> (anywhere before a
-/// literal "--"; later arguments are positional and the "--" is dropped).
+/// Mirrors the launcher: global flags are recognised before the command
+/// word and, except for `type`, after it. A literal "--" ends flag parsing
+/// (later arguments are positional and the "--" is dropped).
 pub(crate) fn split(args: &[String]) -> (Globals, Vec<String>) {
     let mut globals = Globals::default();
-    let mut rest = Vec::new();
+    let mut rest: Vec<String> = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
+        if arg == "--" {
+            rest.extend(iter.by_ref().cloned());
+            break;
+        }
+        let global_ok = rest.first().is_none_or(|c| c != "type");
         match arg.as_str() {
-            "--" => rest.extend(iter.by_ref().cloned()),
-            "--json" => globals.json = true,
-            "--quiet" => globals.quiet = true,
-            "--no-color" => {}
-            "--lang" => {
+            "--json" if global_ok => globals.json = true,
+            "--quiet" if global_ok => globals.quiet = true,
+            "--no-color" if global_ok => {}
+            "--lang" if global_ok => {
                 iter.next();
             }
-            _ if arg.starts_with("--lang=") => {}
+            _ if global_ok && arg.starts_with("--lang=") => {}
             _ => rest.push(arg.clone()),
         }
     }
@@ -70,6 +75,18 @@ mod tests {
         assert_eq!(g, Globals::default());
         assert_eq!(rest, ["type", "w", "--json", "--quiet"]);
         assert_eq!(split(&s(&["--lang=en", "wait", "a"])).1, ["wait", "a"]);
+    }
+
+    #[test]
+    fn type_text_that_looks_like_a_flag_is_typed() {
+        for text in ["--json", "--quiet", "--no-color", "--lang"] {
+            let (g, rest) = split(&s(&["type", "Notepad", text]));
+            assert_eq!(g, Globals::default());
+            assert_eq!(rest, ["type", "Notepad", text]);
+        }
+        let (g, rest) = split(&s(&["--json", "type", "Notepad", "--quiet"]));
+        assert!(g.json && !g.quiet);
+        assert_eq!(rest, ["type", "Notepad", "--quiet"]);
     }
 
     #[test]
