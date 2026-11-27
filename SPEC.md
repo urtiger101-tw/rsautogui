@@ -740,11 +740,12 @@ pub use crate::{
 pub struct UiSnapshotOptions { pub query: Option<String>, pub role: Option<String>, pub max_nodes: usize, pub max_depth: usize } // 預設 150 / 12
 pub struct UiNode { pub index: usize, pub depth: usize, pub role: String, pub name: String, pub automation_id: String,
                     pub rect: Rect, pub enabled: bool, pub focused: bool, pub offscreen: bool,
-                    pub patterns: Vec<String>, pub value: Option<String> }
+                    pub patterns: Vec<String>, pub value: Option<String>, pub runtime_id: Vec<i32> }
 pub struct UiSnapshot { pub nodes: Vec<UiNode>, pub truncated: bool } // fn to_text(&self) -> String
 pub enum NameMatch { Exact, Contains }                                  // 不分大小寫
 pub struct UiSelector { pub index: Option<usize>, pub name: Option<String>, pub name_match: NameMatch,
-                        pub role: Option<String>, pub automation_id: Option<String> }
+                        pub role: Option<String>, pub automation_id: Option<String>,
+                        pub runtime_id: Option<Vec<i32>> }             // 元素參照釘選 RuntimeId
 pub enum UiAction { Invoke, Toggle, Select, Expand, Collapse, Focus }
 
 impl UiAutomation {
@@ -753,8 +754,14 @@ impl UiAutomation {
     pub fn resolve(&mut self, window: &Window, selector: &UiSelector) -> Result<UiNode>;
     pub fn act(&mut self, window: &Window, selector: &UiSelector, action: UiAction) -> Result<UiNode>;
     pub fn set_value(&mut self, window: &Window, selector: &UiSelector, text: &str) -> Result<String>; // 回讀值
+    // snapshot_within / resolve_within / act_within / set_value_within：同上，另加 `timeout: Duration`
+    // 與 `check: &dyn Fn() -> Result<()>`（取消、緊急停止）。動作開始前逾時或 check 失敗 → 動作絕不執行；
+    // 動作開始後逾時 → `Error::Uia("unconfirmed: …")`，呼叫端須重新觀察，不可盲目重試。
 }
 ```
+
+- 密碼判定失敗（`IsPassword` 讀取錯誤）視同密碼。
+- `ui_click` 的實體點擊後援：點位裁切至主螢幕，且 `WindowFromPoint` → `GA_ROOT` 必須等於目標視窗，否則拒絕（被其他視窗覆蓋）。
 
 選擇器：無符合 → `ElementNotFound`；多於一個 → `AmbiguousElement(n)`。
 

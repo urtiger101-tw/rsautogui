@@ -41,6 +41,16 @@ Features compared against Antigravity Computer Use: accessibility-tree control, 
 - The MCP timeout hint is generic, since several tools now wait.
 - New cargo feature `uia` (on in `autogui-control-core` and the runtime), using the `windows` 0.62 crate for COM only.
 
+### Safety details
+
+- UI Automation actions never run late: if the call is cancelled, stopped or times out before the pattern call starts, it is skipped. A timeout after it starts returns an `unconfirmed:` error (not retryable; re-observe first).
+- Element refs are pinned to the UIA RuntimeId, so a ref cannot silently hit a different element after the tree changes.
+- If `IsPassword` cannot be read, the element is treated as a password.
+- The `ui_click` real-click fallback is clipped to the primary screen and refused when another window covers the point.
+- `wait_change` reports `changed: true` with a `reason` when the window loses the foreground or is resized.
+- `run` sets `isError` when a step fails, including `stopped`, `fail_safe` and `cancelled`.
+- `paste_text` rejects text containing NUL and never errors after the text was delivered; a failed clipboard restore returns `clipboard_restored: false`.
+
 ### Fixed
 
 - `install.ps1`, `doctor` and `mcp config --host claude-desktop` now find the Microsoft Store build's Claude Desktop config at `%LOCALAPPDATA%\Claude-Data\anthropicpbc.claude_*\claude_desktop_config.json`. They fall back to `%APPDATA%\Claude`.
