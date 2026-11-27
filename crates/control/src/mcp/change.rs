@@ -41,8 +41,16 @@ struct Poll {
     interval: Duration,
 }
 
+/// One polled frame; losing the foreground counts as a visible change.
+enum Frame {
+    Image(Screenshot),
+    ForegroundLost,
+}
+
 #[derive(Debug, PartialEq)]
 struct Outcome {
+    /// Set when the change was the target losing foreground or being resized.
+    reason: Option<&'static str>,
     changed: bool,
     /// Ratio that triggered the change, or the largest ratio seen.
     ratio: f64,
@@ -54,22 +62,44 @@ struct Outcome {
 /// `interval` until the diff ratio reaches `threshold` (and is above zero) or
 /// `timeout` passes. `check` runs before every slice of every wait.
 fn poll_change(
-    frame: &mut dyn FnMut() -> Result<Screenshot>,
+    frame: &mut dyn FnMut() -> Result<Frame>,
     p: &Poll,
     check: &dyn Fn() -> Result<()>,
 ) -> Result<Outcome> {
     check()?;
     sleep_sliced(p.settle, check)?;
-    let baseline = frame()?;
+    let baseline = match frame()? {
+        Frame::Image(image) => image,
+        Frame::ForegroundLost => {
+            return Err(Error::PermissionDenied(
+                "target window lost foreground focus",
+            ));
+        }
+    };
     let start = Instant::now();
     let mut max_ratio = 0.0f64;
+    let event = |reason| Outcome {
+        reason: Some(reason),
+        changed: true,
+        ratio: 1.0,
+        bounds: None,
+        elapsed_ms: start.elapsed().as_millis(),
+    };
     loop {
         let remaining = p.timeout.saturating_sub(start.elapsed());
         sleep_sliced(p.interval.min(remaining), check)?;
-        let diff = frame()?.diff(&baseline, p.tolerance)?;
+        let image = match frame()? {
+            Frame::Image(image) => image,
+            Frame::ForegroundLost => return Ok(event("foreground_lost")),
+        };
+        if image.width != baseline.width || image.height != baseline.height {
+            return Ok(event("resized"));
+        }
+        let diff = image.diff(&baseline, p.tolerance)?;
         max_ratio = max_ratio.max(diff.ratio);
         if diff.ratio > 0.0 && diff.ratio >= p.threshold {
             return Ok(Outcome {
+                reason: None,
                 changed: true,
                 ratio: diff.ratio,
                 bounds: diff.bounds,
@@ -78,6 +108,7 @@ fn poll_change(
         }
         if start.elapsed() >= p.timeout {
             return Ok(Outcome {
+                reason: None,
                 changed: false,
                 ratio: max_ratio,
                 bounds: None,
@@ -145,11 +176,15 @@ pub(super) fn call(
         .region
         .as_ref()
         .map(|r| Rect::new(r.x, r.y, r.width, r.height));
-    let capture = |session: &mut Session| -> Result<Screenshot> {
+    let capture = |session: &mut Session| -> Result<Frame> {
         let gui = session.gui()?;
         let frame = match &source {
             Source::Window(window) => {
-                active(window)?;
+                match active(window) {
+                    Ok(()) => {}
+                    Err(Error::PermissionDenied(_)) => return Ok(Frame::ForegroundLost),
+                    Err(e) => return Err(e),
+                }
                 let region = screen_region(gui, window, None)?;
                 capture_region(gui, None, region)?
             }
@@ -159,8 +194,8 @@ pub(super) fn call(
             }
         };
         match crop {
-            Some(rect) => frame.region(rect),
-            None => Ok(frame),
+            Some(rect) => frame.region(rect).map(Frame::Image),
+            None => Ok(Frame::Image(frame)),
         }
     };
     let outcome = {
@@ -176,6 +211,10 @@ pub(super) fn call(
         "bounds": bounds,
         "elapsed_ms": outcome.elapsed_ms as u64,
     });
+    let mut result = result;
+    if let Some(reason) = outcome.reason {
+        result["reason"] = json!(reason);
+    }
     Ok(
         json!({"content":[{"type":"text","text":result.to_string()}],"structuredContent":result,"isError":false}),
     )
@@ -207,11 +246,11 @@ mod tests {
         let mut frame = || {
             n.set(n.get() + 1);
             if n.get() < 3 {
-                return Ok(grey(0));
+                return Ok(Frame::Image(grey(0)));
             }
             let mut f = grey(0);
             f.pixels[0..3].copy_from_slice(&[255, 255, 255]);
-            Ok(f)
+            Ok(Frame::Image(f))
         };
         let out = poll_change(&mut frame, &quick(1000, 0.01), &|| Ok(())).unwrap();
         assert!(out.changed);
@@ -221,7 +260,7 @@ mod tests {
 
     #[test]
     fn timeout_is_not_an_error_and_keeps_max_ratio() {
-        let mut frame = || Ok(grey(0));
+        let mut frame = || Ok(Frame::Image(grey(0)));
         let out = poll_change(&mut frame, &quick(30, 0.5), &|| Ok(())).unwrap();
         assert!(!out.changed);
         assert_eq!(out.ratio, 0.0);
@@ -237,7 +276,7 @@ mod tests {
             if n.get() > 1 {
                 f.pixels[0..3].copy_from_slice(&[255, 255, 255]);
             }
-            Ok(f)
+            Ok(Frame::Image(f))
         };
         let out = poll_change(&mut frame, &quick(30, 0.5), &|| Ok(())).unwrap();
         assert!(!out.changed);
@@ -246,7 +285,7 @@ mod tests {
 
     #[test]
     fn check_error_cancels_the_wait() {
-        let mut frame = || Ok(grey(0));
+        let mut frame = || Ok(Frame::Image(grey(0)));
         let calls = Cell::new(0);
         let check = || {
             calls.set(calls.get() + 1);
@@ -258,6 +297,47 @@ mod tests {
         };
         let out = poll_change(&mut frame, &quick(5000, 0.5), &check);
         assert!(matches!(out, Err(Error::Stopped)));
+    }
+
+    #[test]
+    fn foreground_loss_after_baseline_is_a_change() {
+        let n = Cell::new(0);
+        let mut frame = || {
+            n.set(n.get() + 1);
+            Ok(if n.get() < 3 {
+                Frame::Image(grey(0))
+            } else {
+                Frame::ForegroundLost
+            })
+        };
+        let out = poll_change(&mut frame, &quick(1000, 0.5), &|| Ok(())).unwrap();
+        assert!(out.changed);
+        assert_eq!(out.ratio, 1.0);
+        assert_eq!(out.reason, Some("foreground_lost"));
+    }
+
+    #[test]
+    fn foreground_loss_at_baseline_is_an_error() {
+        let mut frame = || Ok(Frame::ForegroundLost);
+        let out = poll_change(&mut frame, &quick(100, 0.5), &|| Ok(()));
+        assert!(matches!(out, Err(Error::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn size_change_is_a_change() {
+        let n = Cell::new(0);
+        let mut frame = || {
+            n.set(n.get() + 1);
+            Ok(Frame::Image(if n.get() < 2 {
+                grey(0)
+            } else {
+                Screenshot::solid(12, 10, Rgb::new(0, 0, 0))
+            }))
+        };
+        let out = poll_change(&mut frame, &quick(1000, 0.5), &|| Ok(())).unwrap();
+        assert!(out.changed);
+        assert_eq!(out.reason, Some("resized"));
+        assert_eq!(out.bounds, None);
     }
 
     #[test]

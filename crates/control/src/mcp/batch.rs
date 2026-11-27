@@ -179,6 +179,18 @@ fn execute(
     json!({"completed": completed, "stopped_at": stopped_at, "results": results})
 }
 
+/// The code of the error that ended the batch when it was a stop, the corner
+/// fail-safe or a cancellation; those must surface as an error result.
+fn fatal_code(summary: &Value) -> Option<String> {
+    let code = summary["results"]
+        .as_array()?
+        .last()?
+        .get("error")?
+        .get("code")?
+        .as_str()?;
+    matches!(code, "stopped" | "fail_safe" | "cancelled").then(|| code.to_owned())
+}
+
 /// Runs the MCP tool `name` (run).
 pub(super) fn call(
     session: &mut Session,
@@ -205,8 +217,12 @@ pub(super) fn call(
             }
         }
     }
+    let fatal = fatal_code(&summary);
+    if let Some(code) = &fatal {
+        summary["code"] = json!(code);
+    }
     content.insert(0, json!({"type": "text", "text": summary.to_string()}));
-    Ok(json!({"content": content, "structuredContent": summary, "isError": false}))
+    Ok(json!({"content": content, "structuredContent": summary, "isError": fatal.is_some()}))
 }
 
 #[cfg(test)]
@@ -306,6 +322,24 @@ mod tests {
         assert_eq!(out["stopped_at"], 1);
         assert_eq!(out["results"].as_array().map(Vec::len), Some(2));
         assert_eq!(out["results"][1]["error"]["code"], "stopped");
+    }
+
+    #[test]
+    fn only_stop_failsafe_and_cancel_are_fatal() {
+        let mk = |code: &str| json!({"results":[{"ok":false,"error":{"code":code}}]});
+        assert_eq!(fatal_code(&mk("stopped")).as_deref(), Some("stopped"));
+        assert_eq!(fatal_code(&mk("fail_safe")).as_deref(), Some("fail_safe"));
+        assert_eq!(fatal_code(&mk("cancelled")).as_deref(), Some("cancelled"));
+        assert_eq!(fatal_code(&mk("invalid_argument")), None);
+        assert_eq!(fatal_code(&json!({"results":[{"ok":true}]})), None);
+    }
+
+    #[test]
+    fn failsafe_step_failure_keeps_its_code() {
+        let batch = parse(steps(&["capture"])).unwrap();
+        let mut exec = |_: &str, _: Value| Err(Error::FailSafe(autogui::Point::new(0, 0)));
+        let out = run(&batch, &mut exec, &|| Ok(()));
+        assert_eq!(fatal_code(&out).as_deref(), Some("fail_safe"));
     }
 
     #[test]
