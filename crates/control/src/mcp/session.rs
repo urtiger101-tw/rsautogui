@@ -196,6 +196,22 @@ struct Drag {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PathPoint {
+    x: i32,
+    y: i32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DragPath {
+    target: Option<String>,
+    display: Option<String>,
+    capture_id: String,
+    points: Vec<PathPoint>,
+    button: Option<String>,
+    duration_ms: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Scroll {
     target: Option<String>,
     display: Option<String>,
@@ -219,6 +235,8 @@ enum PointerAction {
     Scroll(i32, bool),
     Move,
     Drag(Point, MouseButton, Duration),
+    /// Image-relative points until the proof maps each one to desktop pixels.
+    Path(Vec<Point>, MouseButton, Duration),
 }
 struct PointerCall {
     target: Option<String>,
@@ -282,6 +300,31 @@ fn pointer_call(name: &str, args: Value) -> Result<PointerCall> {
                 to: Some((a.to_x, a.to_y)),
             }
         }
+        "drag_path" => {
+            let a: DragPath = decode(args)?;
+            if !(2..=256).contains(&a.points.len()) {
+                return Err(Error::InvalidArgument("points must contain 2..256 entries"));
+            }
+            let duration = a.duration_ms.unwrap_or(600);
+            if duration > 10000 {
+                return Err(Error::InvalidArgument("duration_ms must be 0..10000"));
+            }
+            let points: Vec<Point> = a.points.iter().map(|p| Point::new(p.x, p.y)).collect();
+            let start = points[0];
+            PointerCall {
+                target: a.target,
+                display: a.display,
+                capture_id: a.capture_id,
+                x: start.x,
+                y: start.y,
+                action: PointerAction::Path(
+                    points,
+                    super::input::button(a.button.as_deref())?,
+                    Duration::from_millis(duration),
+                ),
+                to: None,
+            }
+        }
         _ => {
             let a: CapturedPoint = decode(args)?;
             let clicks = a.clicks.unwrap_or(1);
@@ -324,6 +367,29 @@ fn drag_move(
                 gui.move_to_display(display, point)?;
             }
         }
+    }
+    check()
+}
+
+/// Moves a held button through `points[1..]` on an explicit display, one
+/// validated display point per segment. The duration is split by segment
+/// length, as in `AutoGui::drag_path`.
+fn drag_path_display(
+    gui: &mut AutoGui,
+    display: &Display,
+    points: &[Point],
+    duration: Duration,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    check()?;
+    let durations = super::input::path_durations(points, duration);
+    for (dest, segment) in points[1..].iter().zip(durations) {
+        // The button is held: keep cancellation and the fail-safe live.
+        sleep_sliced(segment, || {
+            check()?;
+            failsafe(gui)
+        })?;
+        gui.move_to_display(display, *dest)?;
     }
     check()
 }
@@ -722,7 +788,7 @@ impl Session {
                 });
                 Ok(output)
             }
-            "click_at" | "scroll" | "pointer_move" | "drag" => {
+            "click_at" | "scroll" | "pointer_move" | "drag" | "drag_path" => {
                 let proof = self.capture.take().ok_or(Error::InvalidArgument(
                     "no unused capture; call capture or display_capture first",
                 ))?;
@@ -731,6 +797,11 @@ impl Session {
                 let point = proof.point(target, display_key, &a.capture_id, a.x, a.y)?;
                 if let (PointerAction::Drag(to, _, _), Some((x, y))) = (&mut a.action, a.to) {
                     *to = proof.point(target, display_key, &a.capture_id, x, y)?;
+                }
+                if let PointerAction::Path(points, _, _) = &mut a.action {
+                    for p in points.iter_mut() {
+                        *p = proof.point(target, display_key, &a.capture_id, p.x, p.y)?;
+                    }
                 }
                 let window = proof
                     .target
@@ -746,6 +817,13 @@ impl Session {
                 proof.verify(gui, window.as_ref(), display.as_ref(), point, check)?;
                 if let PointerAction::Drag(to, _, _) = a.action {
                     proof.verify(gui, window.as_ref(), display.as_ref(), to, check)?;
+                }
+                let path_end = match &a.action {
+                    PointerAction::Path(points, _, _) => points.last().copied(),
+                    _ => None,
+                };
+                if let Some(last) = path_end {
+                    proof.verify(gui, window.as_ref(), display.as_ref(), last, check)?;
                 }
                 if let Some(display) = &display {
                     gui.move_to_display(display, point)?;
@@ -791,6 +869,31 @@ impl Session {
                         moved?;
                         released?;
                         detail["dragged"] = json!(true);
+                        detail["to"] = json!({"x":to.x,"y":to.y});
+                        detail["button"] = json!(format!("{button:?}").to_lowercase());
+                    }
+                    PointerAction::Path(points, button, duration) => {
+                        check()?;
+                        if let Some(window) = &window {
+                            active(window)?;
+                        }
+                        match &display {
+                            // The library holds the button, releases it on every
+                            // path and keeps the fail-safe on each segment.
+                            None => gui.drag_path(&points, duration, button)?,
+                            Some(display) => {
+                                gui.mouse_down(button)?;
+                                // The button is released on every path, including errors.
+                                let moved =
+                                    drag_path_display(gui, display, &points, duration, check);
+                                let released = gui.mouse_up(button);
+                                moved?;
+                                released?;
+                            }
+                        }
+                        let to = points.last().copied().unwrap_or(point);
+                        detail["dragged"] = json!(true);
+                        detail["points_sent"] = json!(points.len());
                         detail["to"] = json!({"x":to.x,"y":to.y});
                         detail["button"] = json!(format!("{button:?}").to_lowercase());
                     }
@@ -1204,12 +1307,60 @@ mod tests {
             "locate",
             "click_image",
             "type_text",
+            "paste_text",
             "hotkey",
             "window_wait",
             "app_launch",
         ] {
             let mut s = session();
             assert!(s.call(name, json!({"extra":true}), &|| Ok(())).is_err());
+            assert!(s.capture.is_none());
+            assert!(s.gui.is_none());
+        }
+    }
+
+    #[test]
+    fn drag_path_and_paste_reject_bad_arguments_without_input() {
+        let many: Vec<Value> = (0..257).map(|i| json!({"x":i%10+1,"y":1})).collect();
+        for (name, args) in [
+            (
+                "drag_path",
+                json!({"target":"w1-0","capture_id":"c1","points":[{"x":1,"y":1}]}),
+            ),
+            (
+                "drag_path",
+                json!({"target":"w1-0","capture_id":"c1","points":many}),
+            ),
+            (
+                "drag_path",
+                json!({"target":"w1-0","capture_id":"c1","points":[{"x":1,"y":1},{"x":2,"y":2,"z":3}]}),
+            ),
+            (
+                "drag_path",
+                json!({"target":"w1-0","capture_id":"c1","points":[{"x":1,"y":1},{"x":2,"y":2}],"duration_ms":10001}),
+            ),
+            (
+                "drag_path",
+                json!({"target":"w1-0","capture_id":"c1","points":[{"x":1,"y":1},{"x":2,"y":2}],"button":"x"}),
+            ),
+            // Valid arguments, but the target was never listed in this session.
+            (
+                "drag_path",
+                json!({"target":"w1-0","capture_id":"c1","points":[{"x":1,"y":1},{"x":2,"y":2}]}),
+            ),
+            (
+                "paste_text",
+                json!({"target":"w1-0","text":"a".repeat(20_001)}),
+            ),
+            (
+                "paste_text",
+                json!({"target":"w1-0","text":"hi","extra":true}),
+            ),
+            // Valid arguments, but the target was never listed in this session.
+            ("paste_text", json!({"target":"w1-0","text":"hi"})),
+        ] {
+            let mut s = session();
+            assert!(s.call(name, args, &|| Ok(())).is_err(), "{name} accepted");
             assert!(s.capture.is_none());
             assert!(s.gui.is_none());
         }
