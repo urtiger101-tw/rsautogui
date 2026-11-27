@@ -505,7 +505,6 @@ const READ_ONLY_AFTER_STOP: &[&str] = &[
     "ui_snapshot",
     "ui_wait",
     "wait_change",
-    "screensaver",
 ];
 
 impl Session {
@@ -585,7 +584,14 @@ impl Session {
         // Once the stop chord was seen, input stays refused until restart.
         self.stop.arm();
         let latch = self.stop.clone();
-        let read_only = READ_ONLY_AFTER_STOP.contains(&name);
+        // `screensaver status` only reads and `resume` restores the user's
+        // settings; pause and stop change the desktop, so they stay refused.
+        let read_only = READ_ONLY_AFTER_STOP.contains(&name)
+            || (name == "screensaver"
+                && matches!(
+                    args.get("action").and_then(Value::as_str),
+                    Some("status" | "resume")
+                ));
         if !read_only {
             latch.check()?;
         }
@@ -1439,9 +1445,25 @@ mod tests {
             assert!(matches!(result, Err(Error::Stopped)), "{name}: {result:?}");
             assert!(s.gui.is_none());
         }
-        // Observation still runs (here it fails on its own arguments instead).
+        for action in ["pause", "stop"] {
+            let result = s.call("screensaver", json!({"action":action}), &|| Ok(()));
+            assert!(
+                matches!(result, Err(Error::Stopped)),
+                "{action}: {result:?}"
+            );
+        }
+        // Observation, screensaver status and resume still run (here they
+        // fail on their own bad arguments instead).
         let result = s.call("windows_list", json!({"bogus":1}), &|| Ok(()));
         assert!(!matches!(result, Err(Error::Stopped)));
+        for action in ["status", "resume"] {
+            let args = json!({"action":action,"bogus":1});
+            let result = s.call("screensaver", args, &|| Ok(()));
+            assert!(
+                !matches!(result, Err(Error::Stopped)),
+                "{action}: {result:?}"
+            );
+        }
     }
 
     #[test]
