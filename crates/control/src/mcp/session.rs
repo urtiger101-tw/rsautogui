@@ -398,7 +398,7 @@ pub struct Session {
 }
 
 impl Session {
-    fn gui(&mut self) -> Result<&mut AutoGui> {
+    pub(super) fn gui(&mut self) -> Result<&mut AutoGui> {
         if !cfg!(windows) {
             return Err(Error::UnsupportedPlatform);
         }
@@ -414,7 +414,7 @@ impl Session {
             .as_mut()
             .ok_or(Error::Input("backend unavailable".into()))
     }
-    fn target(&self, key: &str) -> Result<Window> {
+    pub(super) fn target(&self, key: &str) -> Result<Window> {
         let window = self.targets.get(key).ok_or(Error::InvalidArgument(
             "unknown/stale target; call windows_list again",
         ))?;
@@ -475,7 +475,14 @@ impl Session {
         // pixels, targets or display references invalidate it even on failure.
         if !matches!(
             name,
-            "click_at" | "scroll" | "pointer_move" | "drag" | "cursor_position" | "session_status"
+            "click_at"
+                | "scroll"
+                | "pointer_move"
+                | "drag"
+                | "drag_path"
+                | "cursor_position"
+                | "session_status"
+                | "run"
         ) {
             self.capture = None;
         }
@@ -970,6 +977,12 @@ impl Session {
                     ))
                 }
             }
+            "ui_snapshot" | "ui_click" | "ui_set_value" | "ui_wait" => {
+                super::ui::call(self, name, args, check)
+            }
+            "wait_change" => super::change::call(self, name, args, check),
+            "run" => super::batch::call(self, name, args, check),
+            "paste_text" => super::paste::call(self, name, args, check),
             _ => Err(Error::InvalidArgument("unknown tool")),
         }
     }

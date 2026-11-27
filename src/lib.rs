@@ -46,6 +46,14 @@ pub mod tweens {
     pub use crate::tween::*;
 }
 
+// --- 0.3.0 WP-A: UI Automation (src/uia.rs, src/uia_win.rs; SPEC §18) ---
+
+// --- 0.3.0 WP-B: frame diff and emergency stop (src/diff.rs, src/stop.rs; SPEC §7.3, §19) ---
+
+// --- 0.3.0 WP-C: clipboard (src/clipboard.rs, src/clipboard_win.rs; SPEC §20) ---
+
+// --- end 0.3.0 modules ---
+
 pub fn default_locate_options() -> LocateOptions {
     LocateOptions::default()
 }

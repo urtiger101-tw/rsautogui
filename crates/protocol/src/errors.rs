@@ -36,11 +36,17 @@ pub enum ErrorCode {
     RuntimeUnavailable,
     /// Anything else.
     Internal,
+    /// No UI Automation element matched the selector.
+    ElementNotFound,
+    /// The selector matched more than one UI Automation element.
+    AmbiguousElement,
+    /// The user pressed the emergency stop chord; input stays refused.
+    Stopped,
 }
 
 impl ErrorCode {
     /// Every code, for documentation and tests.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 16] = [
         Self::InvalidArgument,
         Self::WindowNotFound,
         Self::ImageNotFound,
@@ -54,6 +60,9 @@ impl ErrorCode {
         Self::CaptureFailed,
         Self::RuntimeUnavailable,
         Self::Internal,
+        Self::ElementNotFound,
+        Self::AmbiguousElement,
+        Self::Stopped,
     ];
 
     /// The stable wire name.
@@ -72,6 +81,9 @@ impl ErrorCode {
             Self::CaptureFailed => "capture_failed",
             Self::RuntimeUnavailable => "runtime_unavailable",
             Self::Internal => "internal",
+            Self::ElementNotFound => "element_not_found",
+            Self::AmbiguousElement => "ambiguous_element",
+            Self::Stopped => "stopped",
         }
     }
 

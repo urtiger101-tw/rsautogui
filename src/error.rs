@@ -20,6 +20,21 @@ pub enum Error {
     Input(String),
     #[error("screenshot: {0}")]
     Screenshot(String),
+    /// No UI Automation element matched the selector (SPEC §18).
+    #[error("ui element not found")]
+    ElementNotFound,
+    /// The selector matched this many UI Automation elements (SPEC §18).
+    #[error("{0} ui elements match; narrow the selector")]
+    AmbiguousElement(usize),
+    /// The emergency stop chord Ctrl+Alt+F12 was pressed (SPEC §19).
+    #[error("stopped by the emergency stop chord (Ctrl+Alt+F12)")]
+    Stopped,
+    /// The clipboard could not be opened, read or written (SPEC §20).
+    #[error("clipboard: {0}")]
+    Clipboard(String),
+    /// A UI Automation (COM) call failed (SPEC §18).
+    #[error("ui automation: {0}")]
+    Uia(String),
     #[error("io: {0}")]
     Io(#[from] io::Error),
 }

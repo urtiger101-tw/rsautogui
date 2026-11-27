@@ -26,7 +26,8 @@
 
 - `alert` / `confirm` / `prompt` 訊息框
 - OCR
-- 鍵盤 hook / 讀目前按鍵狀態 / keylogging
+- 鍵盤 hook / keylogging（0.3.0 起仍禁止 `SetWindowsHookEx` 與任何按鍵記錄）
+- 讀目前按鍵狀態，**唯一例外**：§19 固定的緊急停止組合鍵 Ctrl+Alt+F12，只以 `GetAsyncKeyState` 讀這三個 VK，從不記錄
 - 多螢幕虛擬桌面座標（僅主螢幕）
 - Android / iOS
 - macOS / Linux 視窗控制（API 要存在，執行時回 `UnsupportedPlatform`）
@@ -94,6 +95,7 @@ Features：
 | `locate` | 開 | `image` crate 精確模板比對 |
 | `opencv` | 關 | `confidence` 模糊比對；沒開卻傳 confidence → `Error::FeatureDisabled` |
 | `windows-extra` | Win 自動 | 僅文件用，不改變 API |
+| `uia` | 關（`autogui-control-core` / runtime 預設開） | Windows UI Automation（§18）；沒開 → `Error::FeatureDisabled("uia")` |
 
 依賴建議（可等價替換，但公開 API 不變）：
 
@@ -101,7 +103,8 @@ Features：
 - `xcap`（或 `screenshots`）
 - `image`
 - `thiserror`
-- `windows`（target_os = windows）
+- `windows-sys`（target_os = windows；Win32、剪貼簿、緊急停止）
+- `windows`（target_os = windows，optional，僅 feature `uia` 的 COM）
 - 可選：`opencv`（feature `opencv`）
 
 ---
@@ -169,6 +172,16 @@ pub enum Error {
     Input(String),
     #[error("screenshot: {0}")]
     Screenshot(String),
+    #[error("ui element not found")]
+    ElementNotFound,                 // §18
+    #[error("{0} ui elements match; narrow the selector")]
+    AmbiguousElement(usize),         // §18
+    #[error("stopped by the emergency stop chord (Ctrl+Alt+F12)")]
+    Stopped,                         // §19
+    #[error("clipboard: {0}")]
+    Clipboard(String),               // §20
+    #[error("ui automation: {0}")]
+    Uia(String),                     // §18
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -428,6 +441,10 @@ impl AutoGui {
 
 ---
 
+### 7.3 畫面差異（0.3.0）
+
+`Screenshot::diff` 與 MCP `wait_change`，見 §21。
+
 ## 8. Windows 視窗控制
 
 ### 8.1 查詢函式
@@ -527,6 +544,12 @@ autogui-rs/
     locate.rs
     window.rs           // 跨平台 stub
     window_win.rs       // cfg(windows)
+    uia.rs              // §18 型別、純邏輯、非 Windows stub
+    uia_win.rs          // cfg(all(windows, feature = "uia"))
+    diff.rs             // §7.3 畫面差異
+    stop.rs             // §19 緊急停止
+    clipboard.rs        // §20 跨平台介面
+    clipboard_win.rs    // cfg(windows)
   examples/
     cheat_sheet.rs
     spiral_drag.rs
@@ -647,6 +670,15 @@ size/position/screenshot/pixel。合成測試 + 真實截圖 smoke（ignore）�
 **M6 — 文件**  
 README、examples/cheat_sheet.rs、CHANGELOG、clipp/fmt 綠。
 
+**M7 — UI Automation（0.3.0）**  
+§18。選擇器純邏輯測試、非 Windows / feature 關閉的錯誤型別測試、Notepad live 測試（ignore）。
+
+**M8 — 等待、批次、緊急停止（0.3.0）**  
+§7.3、§19、§21。
+
+**M9 — 路徑拖曳、剪貼簿（0.3.0）**  
+§5.3 `drag_path`、§20。
+
 每個里程碑結束時提交訊息格式：
 
 ```
@@ -693,3 +725,58 @@ pub use crate::{
 - 找圖精確模式可用簡單雙迴圈；影像大時可先做 2× 降採樣粗搜再精修，但結果必須與全像素搜尋一致。
 - 禁止在 library 裡 `println!`。
 - 禁止新增 network dependency。
+
+---
+
+## 18. UI Automation（0.3.0，Windows only）
+
+- 檔案：`src/uia.rs`（型別、選擇器純邏輯、非 Windows stub）、`src/uia_win.rs`（`cfg(all(windows, feature = "uia"))`）。
+- 非 Windows 回 `UnsupportedPlatform`；feature `uia` 關閉回 `FeatureDisabled("uia")`。
+- COM 只在 `UiAutomation` 擁有的單一 MTA worker thread 初始化；跨執行緒只傳純資料。呼叫端以逾時等待，worker 卡住時放棄並重建，永不 join 卡住的 thread。
+- 以廣度優先逐層走訪並受 `max_nodes` / `max_depth` 限制，禁止 `FindAll(TreeScope_Subtree)`。
+- `IsPassword` 元素的值永不回傳。樹狀文字是不可信資料。
+
+```rust
+pub struct UiSnapshotOptions { pub query: Option<String>, pub role: Option<String>, pub max_nodes: usize, pub max_depth: usize } // 預設 150 / 12
+pub struct UiNode { pub index: usize, pub depth: usize, pub role: String, pub name: String, pub automation_id: String,
+                    pub rect: Rect, pub enabled: bool, pub focused: bool, pub offscreen: bool,
+                    pub patterns: Vec<String>, pub value: Option<String> }
+pub struct UiSnapshot { pub nodes: Vec<UiNode>, pub truncated: bool } // fn to_text(&self) -> String
+pub enum NameMatch { Exact, Contains }                                  // 不分大小寫
+pub struct UiSelector { pub index: Option<usize>, pub name: Option<String>, pub name_match: NameMatch,
+                        pub role: Option<String>, pub automation_id: Option<String> }
+pub enum UiAction { Invoke, Toggle, Select, Expand, Collapse, Focus }
+
+impl UiAutomation {
+    pub fn new() -> Result<Self>;
+    pub fn snapshot(&mut self, window: &Window, options: &UiSnapshotOptions) -> Result<UiSnapshot>;
+    pub fn resolve(&mut self, window: &Window, selector: &UiSelector) -> Result<UiNode>;
+    pub fn act(&mut self, window: &Window, selector: &UiSelector, action: UiAction) -> Result<UiNode>;
+    pub fn set_value(&mut self, window: &Window, selector: &UiSelector, text: &str) -> Result<String>; // 回讀值
+}
+```
+
+選擇器：無符合 → `ElementNotFound`；多於一個 → `AmbiguousElement(n)`。
+
+MCP：`ui_snapshot`（唯讀）、`ui_click`、`ui_set_value`、`ui_wait`（唯讀，`state` = `present|absent`，`abort_on`）。元素參照為 `e{gen}-{index}`；新 snapshot 或 `windows_list` 使舊參照失效。CLI：`ui snapshot|click|set-value|wait`。
+
+## 19. 緊急停止
+
+- `Settings::stop_key: bool`，預設 `true`。`AutoGui::before_action` 在 `stop_key && stop::chord_down()` 時回 `Error::Stopped`。
+- `src/stop.rs`：`pub fn chord_down() -> bool`（非 Windows 恆為 false）；`pub struct StopLatch`（`arm()`、`tripped()`、`check() -> Result<()>`），30 ms 輪詢 thread 設定 `AtomicBool`。
+- MCP server 對整個連線閂鎖：觸發後所有會改變狀態的工具回 `stopped` 直到重啟；唯讀工具照常。
+- `hotkey` 拒絕任何包含 ctrl+alt+f12 的組合鍵（避免注入的按鍵觸發自己）。
+- 緊急停止**補充**角落 fail-safe，從不取代它。
+
+## 20. 剪貼簿貼上
+
+- `src/clipboard.rs` / `src/clipboard_win.rs`：`pub fn get_text() -> Result<Option<String>>`、`pub fn set_text(text: &str) -> Result<()>`。
+- `AutoGui::paste(&mut self, text: &str, restore: bool) -> Result<bool>`：設定文字、送 Ctrl+V、等待 150 ms 後還原；回傳是否已還原。
+- 只還原文字；原剪貼簿非文字時不還原，結果會說明。送 Ctrl+V 前重新確認前景視窗。
+- MCP：`paste_text`；CLI：`paste <title> <text>`。
+
+## 21. Agent 工具：等待與批次
+
+- `wait_change`（§7.3）：以 `Screenshot::diff(&self, other, tolerance) -> Result<FrameDiff>`（`FrameDiff { ratio: f64, bounds: Option<Rect> }`，尺寸不同 → `InvalidArgument`）輪詢視窗或顯示器直到變化比例超過門檻或逾時。
+- `drag_path`（§5.3）：`AutoGui::drag_path(&mut self, points: &[Point], duration: Duration, button: MouseButton) -> Result<()>`，2..=256 點，依線段長度分配時間，所有路徑都會放開按鍵。
+- `run`：1..8 個 `{tool, arguments}` 步驟，依序經 `Session::call` 執行（proof、fail-safe、取消檢查不變），第一個錯誤即停止。禁止巢狀 `run`、`app_launch`、`screensaver`。`capture_id` 寫 `"$last"` 代表批次中最新一次 capture。

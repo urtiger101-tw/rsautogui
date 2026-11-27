@@ -15,14 +15,20 @@ pub const INTERNAL: i32 = 70;
 pub(crate) fn exit_code(error: &Error) -> i32 {
     match error {
         Error::FailSafe(_) => FAIL_SAFE,
-        Error::ImageNotFound | Error::WindowNotFound => NOT_FOUND,
+        Error::ImageNotFound | Error::WindowNotFound | Error::ElementNotFound => NOT_FOUND,
+        Error::AmbiguousElement(_) => FAILED,
+        Error::Stopped => BLOCKED,
         Error::InvalidArgument(m) if is_race(m) => FAILED,
         Error::InvalidArgument(_) => USAGE,
         Error::UnsupportedPlatform | Error::FeatureDisabled(_) | Error::PermissionDenied(_) => {
             BLOCKED
         }
         Error::Io(io) if io.kind() == ErrorKind::TimedOut => TIMEOUT,
-        Error::Io(_) | Error::Input(_) | Error::Screenshot(_) => FAILED,
+        Error::Io(_)
+        | Error::Input(_)
+        | Error::Screenshot(_)
+        | Error::Clipboard(_)
+        | Error::Uia(_) => FAILED,
     }
 }
 
@@ -31,13 +37,20 @@ fn kind(error: &Error) -> &'static str {
         Error::FailSafe(_) => "fail_safe",
         Error::ImageNotFound => "image_not_found",
         Error::WindowNotFound => "window_not_found",
+        Error::ElementNotFound => "element_not_found",
+        Error::AmbiguousElement(_) => "failed",
+        Error::Stopped => "stopped",
         Error::InvalidArgument(m) if is_race(m) => "failed",
         Error::InvalidArgument(_) => "usage",
         Error::UnsupportedPlatform | Error::FeatureDisabled(_) | Error::PermissionDenied(_) => {
             "blocked"
         }
         Error::Io(io) if io.kind() == ErrorKind::TimedOut => "timeout",
-        Error::Io(_) | Error::Input(_) | Error::Screenshot(_) => "failed",
+        Error::Io(_)
+        | Error::Input(_)
+        | Error::Screenshot(_)
+        | Error::Clipboard(_)
+        | Error::Uia(_) => "failed",
     }
 }
 

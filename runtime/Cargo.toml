@@ -8,10 +8,11 @@ license = "MIT"
 crate-type = ["cdylib"]
 
 [features]
-default = ["agent", "os", "opencv"]
+default = ["agent", "os", "opencv", "uia"]
 agent = ["autogui-control-core/agent"]
 os = ["autogui-control-core/os"]
 opencv = ["autogui-control-core/opencv"]
+uia = ["autogui-control-core/uia"]
 
 [dependencies]
 autogui = { path = ".." }
