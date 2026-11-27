@@ -8,6 +8,8 @@
 //! CLI `type`/`paste`/`ui set-value` text, become `"[N chars]"`. Other
 //! strings are cut to 300 characters. Files older than 30 days are deleted
 //! once per process. A failure to write the log never fails the action.
+// The MCP half (tool redaction, outcomes) only exists with the `agent` feature.
+#![cfg_attr(not(feature = "agent"), allow(dead_code))]
 use serde_json::{Map, Value, json};
 use std::io::Write;
 use std::path::Path;

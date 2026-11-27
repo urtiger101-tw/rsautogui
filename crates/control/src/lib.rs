@@ -6,5 +6,6 @@ pub(crate) mod commands;
 pub(crate) mod desktop;
 #[cfg(feature = "agent")]
 pub mod mcp;
+#[cfg(feature = "agent")]
 pub(crate) mod overlay;
 pub(crate) mod user_config;
