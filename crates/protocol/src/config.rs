@@ -121,7 +121,7 @@ pub fn snippet_parts(host: Host, exe: &Path) -> Result<SnippetParts, String> {
             )),
         ),
         Host::ClaudeDesktop => parts(
-            "%APPDATA%\\Claude\\claude_desktop_config.json",
+            "%APPDATA%\\Claude\\claude_desktop_config.json (Microsoft Store build: %LOCALAPPDATA%\\Claude-Data\\anthropicpbc.claude_*\\claude_desktop_config.json)",
             json_server("mcpServers", &[("command", command), ("args", args)]),
             None,
         ),

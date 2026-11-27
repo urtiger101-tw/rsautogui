@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-11-27
+
+Features compared against Antigravity Computer Use: accessibility-tree control, change waits, batches, path strokes, clipboard entry and a one-chord emergency stop.
+
+### Highlights
+
+- **UI Automation**: agents read a window's accessibility tree and act on elements by ref, name, role or AutomationId instead of guessing pixels.
+- **Emergency stop**: **Ctrl+Alt+F12** stops all input for the MCP connection until the server restarts, alongside the corner fail-safe. It is read by `GetAsyncKeyState` polling; there is still no keyboard hook and nothing is recorded.
+- **Fewer round trips**: `run` executes 1–8 steps per call; `ui_wait` and `wait_change` replace sleep-and-capture loops.
+
+### Added
+
+- MCP tools (19 → 27):
+  - `ui_snapshot`: tree as text plus nodes with `e{gen}-{index}` refs; password values never returned.
+  - `ui_click`: Invoke/Toggle/SelectionItem/ExpandCollapse/Focus, or a real click at the element centre.
+  - `ui_set_value`: ValuePattern, with a readback.
+  - `ui_wait`: text present/absent, with `abort_on`.
+  - `wait_change`: frame-diff wait on a window or display; never sends input.
+  - `drag_path`: one stroke through 2–256 capture-relative points.
+  - `paste_text`: clipboard entry with restore of the previous text.
+  - `run`: batched steps; `"$last"` capture ids; stops at the first failure.
+- MCP error codes `element_not_found`, `ambiguous_element` and `stopped`.
+- CLI: `ui snapshot|click|set-value|wait <title>` and `paste <title> <text>`, with bilingual help.
+- Library:
+  - Types and client: `UiAutomation`, `UiSnapshot`, `UiNode`, `UiSelector`, `NameMatch`, `UiAction`, `UiSnapshotOptions` (feature `uia`, Windows only, COM on one MTA worker with call timeouts).
+  - `Screenshot::diff` / `FrameDiff`.
+  - `AutoGui::drag_path` and `AutoGui::paste`.
+  - `autogui::clipboard::{get_text, set_text}`.
+  - `autogui::stop::{chord_down, StopLatch}` and `Settings::stop_key` (default on).
+  - New `Error` variants `ElementNotFound`, `AmbiguousElement`, `Stopped`, `Clipboard`, `Uia`.
+- Docs: `docs/ui-automation.md`; SPEC §18–§21. The Skill now teaches "tree first, pixels when the tree is blind" and what to do after `stopped`.
+
+### Changed
+
+- `hotkey` refuses any chord containing Ctrl+Alt+F12, because synthetic keys would trip the stop latch.
+- `type` and `paste` treat later `--json`/`--quiet` as text (global flags go before the command word).
+- The MCP timeout hint is generic, since several tools now wait.
+- New cargo feature `uia` (on in `autogui-control-core` and the runtime), using the `windows` 0.62 crate for COM only.
+
+### Safety details
+
+- UI Automation actions never run late: if the call is cancelled, stopped or times out before the pattern call starts, it is skipped. A timeout after it starts returns an `unconfirmed:` error (not retryable; re-observe first).
+- Element refs are pinned to the UIA RuntimeId, so a ref cannot silently hit a different element after the tree changes.
+- If `IsPassword` cannot be read, the element is treated as a password.
+- The `ui_click` real-click fallback is clipped to the primary screen and refused when another window covers the point.
+- `wait_change` reports `changed: true` with a `reason` when the window loses the foreground or is resized.
+- `run` sets `isError` when a step fails, including `stopped`, `fail_safe` and `cancelled`.
+- `paste_text` rejects text containing NUL and never errors after the text was delivered; a failed clipboard restore returns `clipboard_restored: false`.
+
+### Fixed
+
+- `install.ps1`, `doctor` and `mcp config --host claude-desktop` now find the Microsoft Store build's Claude Desktop config at `%LOCALAPPDATA%\Claude-Data\anthropicpbc.claude_*\claude_desktop_config.json`. They fall back to `%APPDATA%\Claude`.
+
 ## 0.2.3 — 2026-11-22
 
 ### Fixed

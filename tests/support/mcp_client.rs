@@ -44,7 +44,7 @@ impl Client {
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
         let tools = client.request("tools/list", json!({}))["tools"].clone();
         let tools = tools.as_array().unwrap();
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 27);
         for tool in tools {
             assert!(tool["title"].is_string(), "{tool}");
             assert_eq!(tool["outputSchema"]["type"], "object", "{tool}");

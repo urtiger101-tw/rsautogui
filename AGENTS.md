@@ -19,6 +19,7 @@ Read `SPEC.md` first. Follow it over guesswork. Do not invent extra public APIs.
 - Message boxes (`alert`/`confirm`/`prompt`) are **out of scope for v1**.
 - Multi-monitor virtual desktop coordinates are **out of scope for v1** except reading primary size.
 - Do not disable fail-safe in examples that move the mouse.
+- The emergency stop chord Ctrl+Alt+F12 (SPEC §19) complements the corner fail-safe and never replaces it. No keyboard hooks.
 
 ## Build / test commands
 
@@ -42,7 +43,7 @@ Windows window tests must compile on all targets but only execute on `cfg(window
 
 See SPEC.md §8.
 
-## Workspace layout (0.2.0)
+## Workspace layout (0.3.0)
 
 - `src/`: the `autogui` library (mouse, keyboard, screen, locate, Win32 `window_win.rs`).
 - `runtime/`: `autogui_runtime.dll`, a thin C-export wrapper loaded on demand by the launcher.

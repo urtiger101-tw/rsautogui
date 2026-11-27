@@ -97,7 +97,32 @@ pub fn report(error: &Error) -> ToolError {
         ),
         Error::Io(e) if e.kind() == std::io::ErrorKind::TimedOut => (
             ErrorCode::Timeout,
-            "the window did not reach the state in time; raise timeout or check title/process with windows_list",
+            "the wait did not reach its state in time; raise timeout, or re-observe (windows_list, capture, ui_snapshot) to check the current state",
+        ),
+        Error::ElementNotFound => (
+            ErrorCode::ElementNotFound,
+            "no UI element matched; run ui_snapshot again for fresh element refs, or use name_match contains, a role or automation_id",
+        ),
+        Error::AmbiguousElement(_) => (
+            ErrorCode::AmbiguousElement,
+            "several UI elements matched; add role or automation_id, or pass an element ref from ui_snapshot",
+        ),
+        Error::Stopped => (
+            ErrorCode::Stopped,
+            "the user pressed Ctrl+Alt+F12 to stop; tell the user, and do not resume input until they restart the MCP server",
+        ),
+        Error::Clipboard(_) => (
+            ErrorCode::InputFailed,
+            "another program holds the clipboard; retry, or use type_text",
+        ),
+        Error::Uia(m) if m.starts_with("unconfirmed:") => {
+            return ToolError::new(ErrorCode::Internal, message)
+                .with_hint("the action may already have taken effect; re-observe with ui_snapshot (or capture) before retrying")
+                .with_retryable(false);
+        }
+        Error::Uia(_) => (
+            ErrorCode::Internal,
+            "UI Automation failed or the app is not responding; retry once, then fall back to capture and pixel tools",
         ),
         Error::InvalidArgument(m) => {
             // "...; retry" marks a transient race (window moved, focus changed).

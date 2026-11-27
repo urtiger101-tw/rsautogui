@@ -378,6 +378,7 @@ impl Host {
 pub struct HostEnv {
     pub home: PathBuf,
     pub appdata: Option<PathBuf>,
+    pub localappdata: Option<PathBuf>,
     pub codex_home: Option<PathBuf>,
     pub xdg_config: Option<PathBuf>,
 }
@@ -394,6 +395,7 @@ impl HostEnv {
                 .or_else(|| var("HOME"))
                 .unwrap_or_default(),
             appdata: var("APPDATA"),
+            localappdata: var("LOCALAPPDATA"),
             codex_home: var("CODEX_HOME"),
             xdg_config: var("XDG_CONFIG_HOME"),
         }
@@ -412,15 +414,60 @@ impl HostEnv {
             .unwrap_or_else(|| self.home.join(".codex"))
     }
 
+    /// `Claude-Data\anthropicpbc.claude_*\claude_desktop_config.json` for the Store build.
+    /// Directories are matched by prefix (the publisher-hash suffix differs) in sorted
+    /// order; the first one whose file exists wins, else the first directory.
+    fn store_claude_desktop_config(&self) -> Option<PathBuf> {
+        let local = self.localappdata.as_ref()?;
+        let entries = std::fs::read_dir(local.join("Claude-Data")).ok()?;
+        let mut dirs: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .starts_with("anthropicpbc.claude_")
+                    && e.path().is_dir()
+            })
+            .map(|e| e.path())
+            .collect();
+        dirs.sort();
+        let files: Vec<PathBuf> = dirs
+            .into_iter()
+            .map(|d| d.join("claude_desktop_config.json"))
+            .collect();
+        files
+            .iter()
+            .find(|f| f.is_file())
+            .or(files.first())
+            .cloned()
+    }
+
     /// Candidate config files in preference order (the first that exists wins).
     pub fn config_paths(&self, host: Host) -> Vec<PathBuf> {
         match host {
             Host::ClaudeCode => vec![self.home.join(".claude.json")],
-            Host::ClaudeDesktop => self
-                .appdata
-                .iter()
-                .map(|a| a.join("Claude").join("claude_desktop_config.json"))
-                .collect(),
+            Host::ClaudeDesktop => {
+                // The Microsoft Store (MSIX) build keeps its live config under
+                // %LOCALAPPDATA%\Claude-Data\anthropicpbc.claude_*. It wins when its file
+                // exists, or when its directory exists and the classic file does not.
+                let classic: Vec<PathBuf> = self
+                    .appdata
+                    .iter()
+                    .map(|a| a.join("Claude").join("claude_desktop_config.json"))
+                    .collect();
+                let mut paths = Vec::new();
+                if let Some(store) = self.store_claude_desktop_config() {
+                    if store.is_file() || !classic.iter().any(|c| c.is_file()) {
+                        paths.push(store);
+                    } else {
+                        paths.extend(classic);
+                        return paths.into_iter().chain(Some(store)).collect();
+                    }
+                }
+                paths.extend(classic);
+                paths
+            }
             Host::Codex => vec![self.codex_dir().join("config.toml")],
             Host::OpenCode => {
                 let dir = self.opencode_home();
@@ -1218,6 +1265,7 @@ mod tests {
         let env = HostEnv {
             home,
             appdata: Some(appdata),
+            localappdata: None,
             codex_home: None,
             xdg_config: None,
         };
@@ -1230,6 +1278,43 @@ mod tests {
         assert_eq!(status("host.agy"), Some(Status::Warn));
         assert_eq!(status("skill"), Some(Status::Ok));
         assert_eq!(exit_code(&checks), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn claude_desktop_config_prefers_store_build_location() {
+        let dir = temp("msix");
+        let appdata = dir.join("roaming");
+        let local = dir.join("local");
+        let env = HostEnv {
+            home: dir.join("home"),
+            appdata: Some(appdata.clone()),
+            localappdata: Some(local.clone()),
+            codex_home: None,
+            xdg_config: None,
+        };
+        let classic = appdata.join("Claude").join("claude_desktop_config.json");
+        // Classic layout only.
+        assert_eq!(env.config_paths(Host::ClaudeDesktop), vec![classic.clone()]);
+        // Store layout wins and is listed first; the hash suffix is matched by prefix.
+        let store = local
+            .join("Claude-Data")
+            .join("anthropicpbc.claude_fnn82j28hfe8t");
+        fs::create_dir_all(&store).unwrap();
+        fs::create_dir_all(local.join("Claude-Data").join("other.app_x")).unwrap();
+        let paths = env.config_paths(Host::ClaudeDesktop);
+        assert_eq!(
+            paths,
+            vec![store.join("claude_desktop_config.json"), classic.clone()]
+        );
+        // Leftover Store directory without a file while the classic file exists: classic wins.
+        fs::create_dir_all(classic.parent().unwrap()).unwrap();
+        fs::write(&classic, "{}").unwrap();
+        assert_eq!(env.config_paths(Host::ClaudeDesktop)[0], classic);
+        // Both files exist: the Store file wins.
+        let store_file = store.join("claude_desktop_config.json");
+        fs::write(&store_file, "{}").unwrap();
+        assert_eq!(env.config_paths(Host::ClaudeDesktop)[0], store_file);
         let _ = fs::remove_dir_all(dir);
     }
 

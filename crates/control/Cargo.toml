@@ -1,15 +1,16 @@
 [package]
 name = "autogui-control-core"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "Windows CLI and MCP tool logic behind autogui-control"
 
 [features]
-default = ["agent", "os", "opencv"]
+default = ["agent", "os", "opencv", "uia"]
 agent = ["autogui/agent"]
 os = ["autogui/os"]
 opencv = ["autogui/opencv"]
+uia = ["autogui/uia"]
 
 [dependencies]
 autogui = { path = "../..", default-features = false, features = ["locate"] }

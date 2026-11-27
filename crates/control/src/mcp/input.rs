@@ -161,6 +161,25 @@ pub(super) fn drag_path(from: Point, to: Point, steps: i32) -> Vec<Point> {
         .collect()
 }
 
+/// Per-segment durations for a stepped path on an explicit display: `total`
+/// split in proportion to each segment's Euclidean length, or equally when
+/// every segment has zero length. Mirrors `AutoGui::drag_path`'s split.
+pub(super) fn path_durations(points: &[Point], total: Duration) -> Vec<Duration> {
+    let lengths: Vec<f64> = points
+        .windows(2)
+        .map(|w| {
+            let dx = f64::from(w[1].x) - f64::from(w[0].x);
+            let dy = f64::from(w[1].y) - f64::from(w[0].y);
+            dx.hypot(dy)
+        })
+        .collect();
+    let sum: f64 = lengths.iter().sum();
+    if sum <= 0.0 {
+        return vec![total.div_f64(lengths.len().max(1) as f64); lengths.len()];
+    }
+    lengths.iter().map(|len| total.mul_f64(len / sum)).collect()
+}
+
 /// Longest single sleep inside [`sleep_sliced`].
 const SLEEP_SLICE: Duration = Duration::from_millis(16);
 
@@ -196,6 +215,21 @@ pub(super) fn type_chunks(text: &str, mut send: impl FnMut(&str) -> Result<()>) 
 mod tests {
     use super::*;
     use autogui::Rgb;
+
+    #[test]
+    fn path_durations_split_by_length_and_fall_back_to_equal() {
+        let pts = [Point::new(0, 0), Point::new(30, 40), Point::new(30, 60)];
+        let parts = path_durations(&pts, Duration::from_millis(700));
+        assert_eq!(
+            parts,
+            [Duration::from_millis(500), Duration::from_millis(200)]
+        );
+        let still = [Point::new(3, 3), Point::new(3, 3), Point::new(3, 3)];
+        assert_eq!(
+            path_durations(&still, Duration::from_millis(600)),
+            [Duration::from_millis(300), Duration::from_millis(300)]
+        );
+    }
 
     fn proof() -> CaptureProof {
         CaptureProof {

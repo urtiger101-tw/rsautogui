@@ -97,6 +97,39 @@ impl AutoGui {
         )
     }
 
+    /// Moves to `points[0]`, holds `button`, drags through the remaining
+    /// points and releases. `duration` is split across the segments in
+    /// proportion to their Euclidean length (an equal split when every
+    /// segment is zero-length). The button is released on every exit path.
+    pub fn drag_path(
+        &mut self,
+        points: &[Point],
+        duration: Duration,
+        button: MouseButton,
+    ) -> Result<()> {
+        if !(2..=MAX_PATH_POINTS).contains(&points.len()) {
+            return Err(Error::InvalidArgument("drag_path needs 2..=256 points"));
+        }
+        let durations = segment_durations(points, duration);
+        self.before_action()?;
+        self.animate_move(points[0], Duration::ZERO, tween::linear)?;
+        self.before_action()?;
+        self.backend.button(button, true)?;
+        let moved = self.drag_segments(&points[1..], &durations);
+        let release = self.backend.button(button, false);
+        moved?;
+        release?;
+        self.after_write()
+    }
+
+    fn drag_segments(&mut self, destinations: &[Point], durations: &[Duration]) -> Result<()> {
+        for (dest, segment) in destinations.iter().zip(durations) {
+            self.before_action()?;
+            self.animate_move(*dest, *segment, tween::linear)?;
+        }
+        Ok(())
+    }
+
     pub fn click_ex(
         &mut self,
         x: Option<i32>,
@@ -220,5 +253,118 @@ impl AutoGui {
             ));
         }
         Ok(())
+    }
+}
+
+/// Largest point list accepted by [`AutoGui::drag_path`].
+const MAX_PATH_POINTS: usize = 256;
+
+/// Splits `total` across the segments of `points` in proportion to their
+/// Euclidean length. Zero total length falls back to an equal split.
+fn segment_durations(points: &[Point], total: Duration) -> Vec<Duration> {
+    let lengths: Vec<f64> = points
+        .windows(2)
+        .map(|w| {
+            let dx = f64::from(w[1].x) - f64::from(w[0].x);
+            let dy = f64::from(w[1].y) - f64::from(w[0].y);
+            dx.hypot(dy)
+        })
+        .collect();
+    let sum: f64 = lengths.iter().sum();
+    if sum <= 0.0 {
+        let count = lengths.len().max(1) as f64;
+        return vec![total.div_f64(count); lengths.len()];
+    }
+    lengths.iter().map(|len| total.mul_f64(len / sum)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::FakeBackend;
+    use crate::error::Error;
+
+    fn fake(width: i32, height: i32) -> AutoGui {
+        let mut g = AutoGui::with_fake(FakeBackend::new(width, height));
+        g.settings_mut().pause = Duration::ZERO;
+        g
+    }
+
+    #[test]
+    fn segment_durations_split_by_length() {
+        let pts = [Point::new(0, 0), Point::new(30, 40), Point::new(30, 60)];
+        // Lengths 50 and 20 of a total 70.
+        let parts = segment_durations(&pts, Duration::from_millis(700));
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], Duration::from_millis(500));
+        assert_eq!(parts[1], Duration::from_millis(200));
+    }
+
+    #[test]
+    fn segment_durations_zero_length_splits_equally() {
+        let pts = [Point::new(5, 5), Point::new(5, 5), Point::new(5, 5)];
+        let parts = segment_durations(&pts, Duration::from_millis(600));
+        assert_eq!(
+            parts,
+            [Duration::from_millis(300), Duration::from_millis(300)]
+        );
+    }
+
+    #[test]
+    fn drag_path_event_order() {
+        let fake = FakeBackend::new(200, 100);
+        let events = fake.shared_events();
+        let mut g = AutoGui::with_fake(fake);
+        g.settings_mut().pause = Duration::ZERO;
+        g.settings_mut().failsafe = false;
+        let pts = [Point::new(10, 10), Point::new(50, 10), Point::new(50, 30)];
+        g.drag_path(&pts, Duration::ZERO, MouseButton::Left)
+            .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                "move 10,10",
+                "button Left down",
+                "move 50,10",
+                "move 50,30",
+                "button Left up",
+            ]
+        );
+    }
+
+    #[test]
+    fn drag_path_rejects_point_counts_outside_2_to_256() {
+        let mut g = fake(200, 100);
+        let one = [Point::new(10, 10)];
+        assert!(matches!(
+            g.drag_path(&one, Duration::ZERO, MouseButton::Left),
+            Err(Error::InvalidArgument(_))
+        ));
+        let many: Vec<Point> = (0..257).map(|i| Point::new(i % 100 + 1, 10)).collect();
+        assert!(matches!(
+            g.drag_path(&many, Duration::ZERO, MouseButton::Left),
+            Err(Error::InvalidArgument(_))
+        ));
+        let max: Vec<Point> = (0..256).map(|i| Point::new(i % 100 + 1, 10)).collect();
+        assert!(g.drag_path(&max, Duration::ZERO, MouseButton::Left).is_ok());
+    }
+
+    #[test]
+    fn drag_path_releases_button_when_failsafe_trips_mid_path() {
+        let mut fake = FakeBackend::new(200, 100);
+        fake.pos = Point::new(100, 50);
+        let events = fake.shared_events();
+        let mut g = AutoGui::with_fake(fake);
+        g.settings_mut().pause = Duration::ZERO;
+        g.settings_mut().failsafe = true;
+        // The second segment ends on the top-left corner: the check before
+        // the third segment fails with the button held.
+        let pts = [Point::new(100, 50), Point::new(0, 0), Point::new(150, 50)];
+        let result = g.drag_path(&pts, Duration::ZERO, MouseButton::Left);
+        assert!(matches!(result, Err(Error::FailSafe(_))));
+        let log = events.lock().unwrap();
+        assert_eq!(log.last().map(String::as_str), Some("button Left up"));
+        assert_eq!(log.iter().filter(|e| e.contains("Left down")).count(), 1);
+        assert_eq!(log.iter().filter(|e| e.contains("Left up")).count(), 1);
     }
 }

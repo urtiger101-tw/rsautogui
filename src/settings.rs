@@ -9,6 +9,8 @@ pub struct Settings {
     pub failsafe_points: Vec<Point>,
     pub minimum_duration: Duration,
     pub darwin_catch_up: Duration,
+    /// Abort with `Error::Stopped` while Ctrl+Alt+F12 is held (SPEC section 19).
+    pub stop_key: bool,
 }
 
 impl Settings {
@@ -26,6 +28,7 @@ impl Settings {
             ],
             minimum_duration: Duration::from_millis(0),
             darwin_catch_up: Duration::from_millis(10),
+            stop_key: true,
         }
     }
 }

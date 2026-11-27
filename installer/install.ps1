@@ -58,6 +58,18 @@ if (-not $ClaudeConfig) { $ClaudeConfig = Join-Path $HomeDirectory '.claude.json
 if (-not $ClaudeDesktopConfig) {
     $roaming = if ($HomeDirectory -eq $env:USERPROFILE) { $env:APPDATA } else { Join-Path $HomeDirectory 'AppData\Roaming' }
     $ClaudeDesktopConfig = Join-Path $roaming 'Claude\claude_desktop_config.json'
+    # The Microsoft Store (MSIX) build reads %LOCALAPPDATA%\Claude-Data\anthropicpbc.claude_<hash>\ instead.
+    $localRoot = if ($HomeDirectory -eq $env:USERPROFILE -and $env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HomeDirectory 'AppData\Local' }
+    $storeDirs = @(Get-ChildItem -LiteralPath (Join-Path $localRoot 'Claude-Data') -Directory -Filter 'anthropicpbc.claude_*' -ErrorAction SilentlyContinue | Sort-Object Name)
+    $storeConfig = $null
+    foreach ($candidate in $storeDirs) {
+        $path = Join-Path $candidate.FullName 'claude_desktop_config.json'
+        if (Test-Path -LiteralPath $path -PathType Leaf) { $storeConfig = $path; break }
+    }
+    if (-not $storeConfig -and $storeDirs.Count -gt 0 -and -not (Test-Path -LiteralPath $ClaudeDesktopConfig -PathType Leaf)) {
+        $storeConfig = Join-Path $storeDirs[0].FullName 'claude_desktop_config.json'
+    }
+    if ($storeConfig) { $ClaudeDesktopConfig = $storeConfig }
 }
 if (-not $AgyConfig) { $AgyConfig = Join-Path $HomeDirectory '.gemini\config\mcp_config.json' }
 if (-not $AgySkillRoot) { $AgySkillRoot = Join-Path $HomeDirectory '.gemini\config\skills' }

@@ -234,7 +234,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autogui"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "autogui-control-core",
  "base64",
@@ -244,13 +244,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
  "xcap",
 ]
 
 [[package]]
 name = "autogui-control-core"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "autogui",
  "autogui-protocol",
@@ -263,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "autogui-launcher"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "autogui-protocol",
  "serde_json",
@@ -272,14 +273,14 @@ dependencies = [
 
 [[package]]
 name = "autogui-protocol"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "autogui-runtime"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "autogui",
  "autogui-control-core",
