@@ -15,17 +15,6 @@ use std::time::Duration;
 
 const MAX_STEPS: usize = 8;
 const FORBIDDEN: &[&str] = &["run", "app_launch", "screensaver"];
-/// Tools added in 0.3.0 that may not be in the embedded catalogue yet.
-const EXTRA: &[&str] = &[
-    "ui_snapshot",
-    "ui_click",
-    "ui_set_value",
-    "ui_wait",
-    "wait_change",
-    "drag_path",
-    "paste_text",
-];
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {
@@ -69,7 +58,7 @@ fn parse(args: Value) -> Result<Batch> {
                 "run cannot contain run, app_launch or screensaver",
             ));
         }
-        if !NAMES.contains(&step.tool.as_str()) && !EXTRA.contains(&step.tool.as_str()) {
+        if !NAMES.contains(&step.tool.as_str()) {
             return Err(Error::InvalidArgument("unknown tool in steps"));
         }
         let arguments = match step.arguments {

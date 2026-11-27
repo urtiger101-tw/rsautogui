@@ -37,10 +37,10 @@ impl ParseError {
 }
 
 /// Commands whose arguments never carry free text may take global flags
-/// after the command word. Everything else (notably `type`) accepts global
-/// flags only before the command word, or never after "--".
+/// after the command word. Everything else (notably `type` and `paste`)
+/// accepts global flags only before the command word, or never after "--".
 pub fn trailing_globals_allowed(command: &str) -> bool {
-    command != "type"
+    !matches!(command, "type" | "paste")
 }
 
 /// Splits global flags from command arguments. Flags are recognised before

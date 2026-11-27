@@ -71,7 +71,7 @@ try {
     Assert ($null -ne $init.capabilities.logging) 'logging capability missing'
     Assert ($init.capabilities.tools.listChanged -eq $false) 'tools.listChanged must be false'
     $list=Request $client 'tools/list' @{}
-    Assert ($list.result.tools.Count -eq 19) 'Wrong tool count'
+    Assert ($list.result.tools.Count -eq 27) 'Wrong tool count'
     foreach ($tool in $list.result.tools) {
         Assert ($tool.title -is [string] -and $tool.title.Length -gt 0) "Tool $($tool.name) lacks title"
         Assert ($tool.inputSchema.type -eq 'object') "Tool $($tool.name) inputSchema not an object"
@@ -132,7 +132,7 @@ Copy-Item -LiteralPath $Executable -Destination $separated
 $client=StartMcp $separated
 try {
     [void](Initialize $client)
-    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 19) 'Tool listing requires DLL'
+    Assert ((Request $client 'tools/list' @{}).result.tools.Count -eq 27) 'Tool listing requires DLL'
     $missing=Tool $client screensaver @{action='status'}
     Assert ($missing.isError -and $missing.content[0].text -match 'autogui_runtime.dll') 'Missing DLL failure unclear'
     Assert ($missing.structuredContent.code -eq 'runtime_unavailable') 'Missing DLL error code wrong'

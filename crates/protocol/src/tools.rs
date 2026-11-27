@@ -1,4 +1,4 @@
-//! The 19 MCP tool names and their embedded JSON schema catalogue.
+//! The 27 MCP tool names and their embedded JSON schema catalogue.
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -23,6 +23,14 @@ pub const NAMES: &[&str] = &[
     "type_text",
     "hotkey",
     "screensaver",
+    "ui_snapshot",
+    "ui_click",
+    "ui_set_value",
+    "ui_wait",
+    "wait_change",
+    "drag_path",
+    "paste_text",
+    "run",
 ];
 
 /// The `tools/list` array, parsed once from the embedded `tools.json`.
@@ -68,7 +76,7 @@ mod tests {
         let tools = definitions().as_array().expect("tools array");
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert_eq!(names, NAMES);
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 27);
         for tool in tools {
             assert!(tool["description"].is_string(), "{tool}");
             assert!(

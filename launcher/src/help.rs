@@ -111,6 +111,24 @@ pub const COMMANDS: &[CommandSpec] = &[
         example: "type Notepad \"Hello\"",
     },
     CommandSpec {
+        name: "paste",
+        usage: "paste <title> <text>",
+        summary: t(
+            "Paste text through the clipboard, then restore it (sends real input)",
+            "透過剪貼簿貼上文字並還原剪貼簿（送出真實輸入）",
+        ),
+        example: "paste Notepad \"多語言 text ✓\"",
+    },
+    CommandSpec {
+        name: "ui",
+        usage: "ui <snapshot|click|set-value|wait> <title> [--name N] [--role R] [--id A] [--text T] [--query Q] [--gone] [--timeout S]",
+        summary: t(
+            "Read or act on a window's UI Automation tree (click and set-value send real input)",
+            "讀取或操作視窗的 UI Automation 樹（click、set-value 會送出真實輸入）",
+        ),
+        example: "ui click Notepad --name Save --role Button",
+    },
+    CommandSpec {
         name: "window",
         usage: "window <inspect|activate|minimize|maximize|restore|show|hide|move|resize|close> <title> [x y|width height]",
         summary: t(

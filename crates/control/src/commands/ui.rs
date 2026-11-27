@@ -503,8 +503,6 @@ fn parse(command: &str, flags: &Flags) -> Result<Request> {
 }
 
 /// `ui <snapshot|click|set-value|wait> <title> [options]`.
-// Until the lead wires this into cli/mod.rs it is reachable only from tests.
-#[allow(dead_code)]
 pub(crate) fn run(args: &[String], json: bool) -> Result<()> {
     let (command, rest) = args.split_first().ok_or(Error::InvalidArgument(USAGE))?;
     let (title, rest) = rest.split_first().ok_or(Error::InvalidArgument(USAGE))?;

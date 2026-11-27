@@ -18,7 +18,8 @@ pub(crate) fn split(args: &[String]) -> (Globals, Vec<String>) {
             rest.extend(iter.by_ref().cloned());
             break;
         }
-        let global_ok = rest.first().is_none_or(|c| c != "type");
+        // Text arguments are typed verbatim, so `--json` inside them stays text.
+        let global_ok = rest.first().is_none_or(|c| c != "type" && c != "paste");
         match arg.as_str() {
             "--json" if global_ok => globals.json = true,
             "--quiet" if global_ok => globals.quiet = true,

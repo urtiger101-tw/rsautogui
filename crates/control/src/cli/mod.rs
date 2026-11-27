@@ -249,6 +249,9 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
     if args[0] == "display" {
         return display_command::run(&args[1..]);
     }
+    if args[0] == "ui" {
+        return crate::commands::ui::run(&args[1..], json_output());
+    }
     // Diagnostics must work even when the input backend cannot start.
     if args[0] == "session" {
         let mut rest = args[1..].to_vec();
@@ -289,6 +292,7 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
         "locate",
         "click",
         "type",
+        "paste",
         "screensaver",
     ]
     .contains(&command)
@@ -418,6 +422,23 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
                 );
             } else if !quiet() {
                 println!("{}", tr!("Typed {} characters", "已輸入 {} 個字元", typed));
+            }
+        }
+        "paste" => {
+            // Clipboard entry (SPEC §20): one foreground check, then Ctrl+V.
+            active(&window)?;
+            let restored = gui.paste(&args[2], true)?;
+            let pasted = args[2].chars().count();
+            if json_output() {
+                println!(
+                    "{}",
+                    serde_json::json!({"action": "paste", "characters": pasted, "clipboard_restored": restored})
+                );
+            } else if !quiet() {
+                println!(
+                    "{}",
+                    tr!("Pasted {} characters", "已貼上 {} 個字元", pasted)
+                );
             }
         }
         "locate" | "click" => {
