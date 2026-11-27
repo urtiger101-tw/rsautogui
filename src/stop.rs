@@ -34,7 +34,8 @@ struct Inner {
 
 /// A latch that stays tripped once the stop chord was seen. `arm()` starts a
 /// 30 ms polling thread that exits shortly after the latch is dropped.
-#[derive(Default)]
+/// Clones share one latch: tripping any clone trips them all.
+#[derive(Clone, Default)]
 pub struct StopLatch {
     inner: Arc<Inner>,
 }

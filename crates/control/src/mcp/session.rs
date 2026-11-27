@@ -5,7 +5,7 @@ use crate::commands::{display as display_command, session, window as window_comm
 use crate::desktop;
 use autogui::{
     AutoGui, Display, Error, FakeBackend, LocateOptions, MouseButton, Point, Rect, Result,
-    Screenshot, Window,
+    Screenshot, Window, stop::StopLatch,
 };
 use base64::Engine;
 use serde::Deserialize;
@@ -383,14 +383,23 @@ fn drag_path_display(
 ) -> Result<()> {
     check()?;
     let durations = super::input::path_durations(points, duration);
+    // Per-move pauses would stretch a 256-point path by seconds; the segment
+    // durations already pace the stroke. The pause is restored on every path.
+    let pause = std::mem::take(&mut gui.settings_mut().pause);
+    let mut moved = Ok(());
     for (dest, segment) in points[1..].iter().zip(durations) {
         // The button is held: keep cancellation and the fail-safe live.
-        sleep_sliced(segment, || {
+        moved = sleep_sliced(segment, || {
             check()?;
             failsafe(gui)
-        })?;
-        gui.move_to_display(display, *dest)?;
+        })
+        .and_then(|()| gui.move_to_display(display, *dest));
+        if moved.is_err() {
+            break;
+        }
     }
+    gui.settings_mut().pause = pause;
+    moved?;
     check()
 }
 
@@ -411,7 +420,24 @@ fn failsafe(gui: &AutoGui) -> Result<()> {
 
 /// Rejects unknown key names using a throwaway fake backend, so validation
 /// never activates a window or sends input.
+/// The emergency stop chord (SPEC §19) is never injected: `GetAsyncKeyState`
+/// also sees synthetic keys, so sending it would stop the session itself.
+fn is_stop_chord(keys: &[&str]) -> bool {
+    let has = |names: &[&str]| {
+        keys.iter()
+            .any(|k| names.contains(&k.trim().to_ascii_lowercase().as_str()))
+    };
+    has(&["ctrl", "ctrlleft", "ctrlright", "control"])
+        && has(&["alt", "altleft", "altright", "option"])
+        && has(&["f12"])
+}
+
 fn validate_keys(keys: &[&str]) -> Result<()> {
+    if is_stop_chord(keys) {
+        return Err(Error::InvalidArgument(
+            "ctrl+alt+f12 is reserved for the emergency stop and is never sent",
+        ));
+    }
     let mut fake = AutoGui::with_fake(FakeBackend::new(1, 1));
     fake.settings_mut().failsafe = false;
     fake.settings_mut().pause = Duration::ZERO;
@@ -461,7 +487,24 @@ pub struct Session {
     capture_generation: u64,
     capture: Option<CaptureProof>,
     pause: Option<PauseLease>,
+    /// Ctrl+Alt+F12 latch for this connection (SPEC §19).
+    stop: StopLatch,
 }
+
+/// Tools that never send input or change windows; they keep working after
+/// the emergency stop so the agent can still observe and report.
+const READ_ONLY_AFTER_STOP: &[&str] = &[
+    "session_status",
+    "displays_list",
+    "display_capture",
+    "windows_list",
+    "cursor_position",
+    "window_wait",
+    "ui_snapshot",
+    "ui_wait",
+    "wait_change",
+    "screensaver",
+];
 
 impl Session {
     pub(super) fn gui(&mut self) -> Result<&mut AutoGui> {
@@ -537,6 +580,18 @@ impl Session {
         args: Value,
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Value> {
+        // Once the stop chord was seen, input stays refused until restart.
+        self.stop.arm();
+        let latch = self.stop.clone();
+        let read_only = READ_ONLY_AFTER_STOP.contains(&name);
+        if !read_only {
+            latch.check()?;
+        }
+        let guarded = || {
+            latch.check()?;
+            check()
+        };
+        let check: &dyn Fn() -> Result<()> = if read_only { check } else { &guarded };
         // Readiness queries preserve the proof; calls that can change focus,
         // pixels, targets or display references invalidate it even on failure.
         if !matches!(
@@ -1367,6 +1422,33 @@ mod tests {
     }
 
     #[test]
+    fn stop_latch_refuses_input_tools_but_not_observation() {
+        let mut s = session();
+        s.stop.trip();
+        for name in [
+            "click_at",
+            "type_text",
+            "hotkey",
+            "run",
+            "ui_click",
+            "paste_text",
+        ] {
+            let result = s.call(name, json!({}), &|| Ok(()));
+            assert!(matches!(result, Err(Error::Stopped)), "{name}: {result:?}");
+            assert!(s.gui.is_none());
+        }
+        // Observation still runs (here it fails on its own arguments instead).
+        let result = s.call("windows_list", json!({"bogus":1}), &|| Ok(()));
+        assert!(!matches!(result, Err(Error::Stopped)));
+        assert!(
+            matches!(
+                s.call("session_status", json!({}), &|| Ok(())),
+                Ok(_) | Err(Error::Io(_) | Error::UnsupportedPlatform | Error::Input(_))
+            ) || !cfg!(windows)
+        );
+    }
+
+    #[test]
     fn readiness_queries_preserve_the_proof() {
         for name in ["cursor_position", "session_status"] {
             let mut s = session();
@@ -1442,6 +1524,17 @@ mod tests {
         );
         assert!(matches!(stale, Err(Error::InvalidArgument(m)) if m.contains("stale target")));
         assert!(validate_keys(&["ctrl", "shift", "esc"]).is_ok());
+        for chord in [
+            &["ctrl", "alt", "f12"][..],
+            &["F12", "Control", "altright"][..],
+            &["ctrlleft", "shift", "alt", "f12"][..],
+        ] {
+            assert!(
+                matches!(validate_keys(chord), Err(Error::InvalidArgument(m)) if m.contains("emergency stop")),
+                "{chord:?}"
+            );
+        }
+        assert!(validate_keys(&["ctrl", "f12"]).is_ok());
     }
 
     #[test]
