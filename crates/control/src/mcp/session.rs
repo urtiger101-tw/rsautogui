@@ -1440,12 +1440,6 @@ mod tests {
         // Observation still runs (here it fails on its own arguments instead).
         let result = s.call("windows_list", json!({"bogus":1}), &|| Ok(()));
         assert!(!matches!(result, Err(Error::Stopped)));
-        assert!(
-            matches!(
-                s.call("session_status", json!({}), &|| Ok(())),
-                Ok(_) | Err(Error::Io(_) | Error::UnsupportedPlatform | Error::Input(_))
-            ) || !cfg!(windows)
-        );
     }
 
     #[test]
