@@ -3,6 +3,7 @@
 //! Only Windows has a clipboard implementation; other platforms return
 //! [`Error::UnsupportedPlatform`] before any input is sent.
 
+use std::thread;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
@@ -39,6 +40,16 @@ pub fn set_text(_text: &str) -> Result<()> {
     Err(Error::UnsupportedPlatform)
 }
 
+/// Puts `previous` back with `set`. Returns whether it was restored: false
+/// when there was no text to restore or the write failed. Never errors, so
+/// a failed restore cannot hide a paste that was already delivered.
+fn restore_previous(previous: Option<String>, set: impl FnOnce(&str) -> Result<()>) -> bool {
+    match previous {
+        Some(old) => set(&old).is_ok(),
+        None => false,
+    }
+}
+
 /// Encodes `text` as UTF-16 code units followed by a single NUL terminator.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn encode_utf16_nul(text: &str) -> Vec<u16> {
@@ -66,21 +77,22 @@ impl AutoGui {
                 "paste text exceeds 20000 characters",
             ));
         }
+        if text.contains('\0') {
+            return Err(Error::InvalidArgument("text must not contain NUL"));
+        }
         self.before_action()?;
         let previous = if restore { get_text()? } else { None };
         set_text(text)?;
-        let pressed = self
-            .hotkey(&["ctrl", "v"])
-            .and_then(|()| self.wait_input_interval(PASTE_SETTLE));
-        // Restore even when the chord failed, so the clipboard does not keep
-        // the injected text; the chord error still takes precedence.
-        let restored = match previous {
-            Some(old) => set_text(&old).map(|()| true),
-            None => Ok(false),
-        };
-        pressed?;
-        let restored = restored?;
-        self.after_write()?;
+        // Errors up to here mean nothing was pasted. From the chord on, the
+        // text may already have reached the target, so no error is returned
+        // for the rest of the call: an agent retrying would paste twice.
+        let chord = self.hotkey(&["ctrl", "v"]);
+        thread::sleep(PASTE_SETTLE);
+        let restored = restore_previous(previous, set_text);
+        // A fail-safe trip here only reports the cursor position; the next
+        // action runs the same check again.
+        let _ = self.after_write();
+        chord?;
         Ok(restored)
     }
 }
@@ -122,6 +134,38 @@ mod tests {
             Err(Error::InvalidArgument(_))
         ));
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn paste_rejects_nul_before_any_clipboard_or_input_access() {
+        let fake = crate::backend::FakeBackend::new(200, 100);
+        let events = fake.shared_events();
+        let mut g = AutoGui::with_fake(fake);
+        g.settings_mut().pause = Duration::ZERO;
+        for text in ["a\0b", "\0", "tail\0"] {
+            assert!(matches!(
+                g.paste(text, true),
+                Err(Error::InvalidArgument("text must not contain NUL"))
+            ));
+        }
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn restore_helper_reports_failed_or_missing_restore_as_not_restored() {
+        let mut calls = 0;
+        assert!(!restore_previous(None, |_| {
+            calls += 1;
+            Ok(())
+        }));
+        assert_eq!(calls, 0);
+        assert!(!restore_previous(Some("old".into()), |_| Err(
+            Error::Clipboard("SetClipboardData failed".into())
+        )));
+        assert!(restore_previous(Some("old".into()), |text| {
+            assert_eq!(text, "old");
+            Ok(())
+        }));
     }
 
     #[test]
