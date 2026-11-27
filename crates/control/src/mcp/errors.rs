@@ -115,6 +115,11 @@ pub fn report(error: &Error) -> ToolError {
             ErrorCode::InputFailed,
             "another program holds the clipboard; retry, or use type_text",
         ),
+        Error::Uia(m) if m.starts_with("unconfirmed:") => {
+            return ToolError::new(ErrorCode::Internal, message)
+                .with_hint("the action may already have taken effect; re-observe with ui_snapshot (or capture) before retrying")
+                .with_retryable(false);
+        }
         Error::Uia(_) => (
             ErrorCode::Internal,
             "UI Automation failed or the app is not responding; retry once, then fall back to capture and pixel tools",

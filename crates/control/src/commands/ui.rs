@@ -33,6 +33,10 @@ const USAGE: &str = "ui snapshot|click|set-value|wait <title> [options]; see --h
 pub(crate) const WAIT_POLL: Duration = Duration::from_millis(200);
 pub(crate) const WAIT_NODES: usize = 1000;
 pub(crate) const WAIT_DEPTH: usize = 20;
+/// Longest wait for one UI Automation request (walk, resolve or action).
+pub(crate) const UI_TIMEOUT: Duration = Duration::from_secs(15);
+/// Shortest per-poll budget of a text wait, so `timeout: 0` still polls once.
+const MIN_POLL_BUDGET: Duration = Duration::from_secs(1);
 /// Longest text accepted by set_value.
 pub(crate) const MAX_SET_VALUE_CHARS: usize = 20_000;
 
@@ -102,15 +106,23 @@ pub(crate) fn method(node: &UiNode, action: ClickAction) -> Method {
     }
 }
 
-/// A selector that only matches `node` itself (same walk index, role, name
-/// and automation id), so an action cannot land on a different element.
+/// A selector that only matches `node` itself: its UIA RuntimeId, or when
+/// the provider reports none, the same walk index, role, name and
+/// automation id. An action cannot land on a look-alike sibling.
 pub(crate) fn pin(node: &UiNode) -> UiSelector {
+    if !node.runtime_id.is_empty() {
+        return UiSelector {
+            runtime_id: Some(node.runtime_id.clone()),
+            ..Default::default()
+        };
+    }
     UiSelector {
         index: Some(node.index),
         name: Some(node.name.clone()),
         name_match: NameMatch::Exact,
         role: Some(node.role.clone()),
         automation_id: (!node.automation_id.is_empty()).then(|| node.automation_id.clone()),
+        runtime_id: None,
     }
 }
 
@@ -140,6 +152,7 @@ pub(crate) fn selector(
         },
         role: clean(role, "role must not be empty")?,
         automation_id: clean(automation_id, "automation_id must not be empty")?,
+        runtime_id: None,
     };
     if selector.name.is_none() && selector.role.is_none() && selector.automation_id.is_none() {
         return Err(Error::InvalidArgument(
@@ -150,7 +163,7 @@ pub(crate) fn selector(
 }
 
 /// Centre of `node` for a real click, if it is enabled, on screen and
-/// inside `bounds` (the window rectangle).
+/// inside `bounds` (the window's visible part of the primary screen).
 pub(crate) fn click_point(node: &UiNode, bounds: Rect) -> Result<Point> {
     if !node.enabled {
         return Err(Error::InvalidArgument("element is disabled"));
@@ -168,15 +181,58 @@ pub(crate) fn click_point(node: &UiNode, bounds: Rect) -> Result<Point> {
         || point.y >= bounds.bottom()
     {
         return Err(Error::InvalidArgument(
-            "element centre is outside the window; scroll it into view and retry",
+            "element centre is outside the window's visible part of the primary screen; scroll it into view and retry",
         ));
     }
     Ok(point)
 }
 
+/// Refuses a click whose point belongs to another top-level window.
+pub(crate) fn require_uncovered(root_at_point: Option<isize>, target: isize) -> Result<()> {
+    if root_at_point == Some(target) {
+        Ok(())
+    } else {
+        Err(Error::InvalidArgument(
+            "element is covered by another window; retry",
+        ))
+    }
+}
+
+/// Root (top-level) window under a desktop physical-pixel point.
+#[cfg(windows)]
+fn root_window_at(point: Point) -> Option<isize> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, WindowFromPoint};
+    unsafe {
+        // Physical pixels for this call only, like the library's DpiGuard.
+        let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let hwnd = WindowFromPoint(POINT {
+            x: point.x,
+            y: point.y,
+        });
+        let root = if hwnd.is_null() {
+            hwnd
+        } else {
+            GetAncestor(hwnd, GA_ROOT)
+        };
+        if !previous.is_null() {
+            SetThreadDpiAwarenessContext(previous);
+        }
+        (!root.is_null()).then_some(root as isize)
+    }
+}
+
+#[cfg(not(windows))]
+fn root_window_at(_: Point) -> Option<isize> {
+    None
+}
+
 /// Activates `window`, re-resolves `node` (activation can move it) and
-/// clicks its centre after a foreground check. The library click keeps the
-/// corner fail-safe.
+/// clicks its centre after foreground, primary-screen and hit-test checks.
+/// The library click keeps the corner fail-safe.
 pub(crate) fn real_click(
     gui: &mut AutoGui,
     ui: &mut UiAutomation,
@@ -187,10 +243,13 @@ pub(crate) fn real_click(
     check()?;
     window.activate()?;
     active(window)?;
-    let fresh = ui.resolve(window, &pin(node))?;
-    let point = click_point(&fresh, window.box_rect()?)?;
+    let fresh = ui.resolve_within(window, &pin(node), UI_TIMEOUT, check)?;
+    // Clip to the primary screen exactly as capture/click_at do.
+    let bounds = crate::cli::screen_region(gui, window, None)?;
+    let point = click_point(&fresh, bounds)?;
     check()?;
     active(window)?;
+    require_uncovered(root_window_at(point), window.hwnd())?;
     gui.click_xy(point.x, point.y)?;
     Ok((fresh, point))
 }
@@ -338,7 +397,17 @@ pub(crate) fn wait(
     let start = Instant::now();
     loop {
         check()?;
-        let snapshot = ui.snapshot(window, &options)?;
+        // Each walk gets only the time left (at least MIN_POLL_BUDGET), so
+        // a slow app cannot stretch the wait past its timeout.
+        let budget = spec
+            .timeout
+            .saturating_sub(start.elapsed())
+            .max(MIN_POLL_BUDGET);
+        let snapshot = match ui.snapshot_within(window, &options, budget, check) {
+            Ok(snapshot) => snapshot,
+            Err(Error::Uia(_)) if start.elapsed() >= spec.timeout => return Err(timed_out()),
+            Err(error) => return Err(error),
+        };
         let outcome = |state, matched: Option<&UiNode>, aborted_on| WaitOutcome {
             state,
             matched: matched.cloned(),
@@ -530,11 +599,12 @@ pub(crate) fn run(args: &[String], json: bool) -> Result<()> {
             }
         }
         Request::Click(selector, action) => {
-            let node = ui.resolve(&window, &selector)?;
+            let node = ui.resolve_within(&window, &selector, UI_TIMEOUT, &no_cancel)?;
             let chosen = method(&node, action);
             let (node, point) = match chosen {
                 Method::Pattern(action) => {
-                    let node = ui.act(&window, &pin(&node), action)?;
+                    let node =
+                        ui.act_within(&window, &pin(&node), action, UI_TIMEOUT, &no_cancel)?;
                     let point = autogui::center(node.rect);
                     (node, point)
                 }
@@ -622,6 +692,7 @@ mod tests {
             offscreen: false,
             patterns: patterns.iter().map(|p| p.to_string()).collect(),
             value: None,
+            runtime_id: Vec::new(),
         }
     }
 
@@ -686,6 +757,36 @@ mod tests {
         let s = selector(Some("Save".into()), true, Some("Button".into()), None).unwrap();
         assert_eq!(s.name_match, NameMatch::Exact);
         assert_eq!(s.index, None);
+    }
+
+    #[test]
+    fn covered_points_are_refused() {
+        assert!(require_uncovered(Some(42), 42).is_ok());
+        for root in [Some(7), None] {
+            assert!(matches!(
+                require_uncovered(root, 42),
+                Err(Error::InvalidArgument(
+                    "element is covered by another window; retry"
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn pin_prefers_runtime_id_over_look_alike_fields() {
+        let mut n = node(7, "Button", "Save", &[]);
+        n.runtime_id = vec![42, 9, 3];
+        let pinned = pin(&n);
+        assert_eq!(pinned.runtime_id.as_deref(), Some(&[42, 9, 3][..]));
+        assert_eq!((pinned.index, pinned.name.as_deref()), (None, None));
+        // A sibling that looks identical but has another RuntimeId differs.
+        let mut twin = n.clone();
+        twin.runtime_id = vec![42, 9, 4];
+        assert_ne!(pin(&twin), pinned);
+        // The same element keeps its pin after its label changes.
+        let mut renamed = n.clone();
+        renamed.name = "Save As".into();
+        assert_eq!(pin(&renamed), pinned);
     }
 
     #[test]

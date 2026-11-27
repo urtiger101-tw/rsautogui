@@ -5,14 +5,17 @@
 //! is abandoned (never joined) and the next call starts a new one. Only plain
 //! data (`UiNode`, `String`, errors) crosses back.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
-use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VariantClear};
+use windows::Win32::System::Variant::{
+    VARENUM, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_I4, VariantClear,
+};
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
     IUIAutomationElement, IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
@@ -24,8 +27,9 @@ use windows::Win32::UI::Accessibility::{
     UIA_IsExpandCollapsePatternAvailablePropertyId, UIA_IsInvokePatternAvailablePropertyId,
     UIA_IsKeyboardFocusablePropertyId, UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId,
     UIA_IsSelectionItemPatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId,
-    UIA_IsValuePatternAvailablePropertyId, UIA_NamePropertyId, UIA_PROPERTY_ID,
-    UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ValuePatternId, UIA_ValueValuePropertyId,
+    UIA_IsValuePatternAvailablePropertyId, UIA_NamePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
+    UIA_RuntimeIdPropertyId, UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
+    UIA_ValueValuePropertyId,
 };
 use windows::core::{BSTR, Interface};
 
@@ -33,21 +37,60 @@ use crate::error::{Error, Result};
 use crate::types::Rect;
 use crate::uia::{
     HARD_MAX_DEPTH, MAX_NAME_CHARS, PATTERN_EXPAND, PATTERN_FOCUS, PATTERN_INVOKE, PATTERN_SELECT,
-    PATTERN_TOGGLE, PATTERN_VALUE, UiAction, UiNode, UiSelector, cap, require_pattern,
+    PATTERN_TOGGLE, PATTERN_VALUE, UNCONFIRMED, UiAction, UiNode, UiSelector, cap, require_pattern,
     require_value, role_name, select, visible_value,
 };
 
-/// Longest wait for one request (a walk, or a resolve plus an action).
-const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest wait for a new worker to initialize COM and UI Automation.
 const INIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A walk stops expanding (and reports truncation) after this long.
 const WALK_BUDGET: Duration = Duration::from_secs(8);
+/// How often a waiting caller runs its `check` callback.
+const CHECK_SLICE: Duration = Duration::from_millis(20);
 /// IUIAutomation2 timeouts, in milliseconds.
 const CONNECTION_TIMEOUT_MS: u32 = 2000;
 const TRANSACTION_TIMEOUT_MS: u32 = 3000;
 
 type Job = Box<dyn FnOnce(&Com) + Send + 'static>;
+
+const PENDING: u8 = 0;
+const ACTING: u8 = 1;
+const CANCELLED: u8 = 2;
+
+/// Shared between a caller and its job: whoever moves it off `PENDING`
+/// first wins. The job must win (`begin_action`) before it acts; a caller
+/// that gives up wins (`cancel`) only if the action has not started, so an
+/// abandoned or cancelled request never acts later.
+#[derive(Clone, Default)]
+pub(crate) struct Token(Arc<AtomicU8>);
+
+impl Token {
+    fn swap_from_pending(&self, to: u8) -> bool {
+        self.0
+            .compare_exchange(PENDING, to, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+    /// True when the caller gave up; jobs stop walking.
+    fn cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == CANCELLED
+    }
+    /// Called by the job right before the pattern call or SetValue.
+    fn begin_action(&self) -> Result<()> {
+        if self.swap_from_pending(ACTING) {
+            Ok(())
+        } else {
+            Err(Error::Uia("request was cancelled before the action".into()))
+        }
+    }
+    /// Called by the caller; false when the action already started.
+    fn cancel(&self) -> bool {
+        self.swap_from_pending(CANCELLED)
+    }
+}
+
+fn unconfirmed() -> Error {
+    Error::Uia(UNCONFIRMED.into())
+}
 
 /// Handle to the worker thread. Holds no COM objects itself.
 pub(crate) struct Engine {
@@ -57,45 +100,76 @@ pub(crate) struct Engine {
 impl Engine {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
-            jobs: Some(spawn()?),
+            jobs: Some(spawn(INIT_TIMEOUT)?),
         })
     }
 
-    /// Runs `job` on the worker and waits up to [`CALL_TIMEOUT`].
+    /// Runs `job` on the worker, waiting at most `timeout` and calling
+    /// `check` every [`CHECK_SLICE`]. A `check` error or the timeout cancels
+    /// the token; if the action already started, the caller waits for its
+    /// outcome until the deadline, then reports it as unconfirmed.
     fn run<T: Send + 'static>(
         &mut self,
-        job: impl FnOnce(&Com) -> Result<T> + Send + 'static,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
+        job: impl FnOnce(&Com, &Token) -> Result<T> + Send + 'static,
     ) -> Result<T> {
+        let deadline = Instant::now() + timeout;
+        check()?;
         let sender = match &self.jobs {
             Some(sender) => sender.clone(),
             None => {
-                let sender = spawn()?;
+                let sender = spawn(timeout.clamp(Duration::from_secs(1), INIT_TIMEOUT))?;
                 self.jobs = Some(sender.clone());
                 sender
             }
         };
+        let token = Token::default();
         let (reply, answer) = mpsc::sync_channel(1);
+        let job_token = token.clone();
         let boxed: Job = Box::new(move |com: &Com| {
-            let _ = reply.send(job(com));
+            let _ = reply.send(job(com, &job_token));
         });
         if sender.send(boxed).is_err() {
             self.jobs = None;
             return Err(Error::Uia("worker thread exited; retry".into()));
         }
-        match answer.recv_timeout(CALL_TIMEOUT) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Abandon the stuck worker: dropping the sender lets it exit
-                // once its COM call returns. It is never joined.
-                self.jobs = None;
-                Err(Error::Uia(format!(
-                    "no response within {} s; the app may be hung",
-                    CALL_TIMEOUT.as_secs()
-                )))
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match answer.recv_timeout(left.min(CHECK_SLICE)) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.jobs = None;
+                    return Err(Error::Uia("worker thread exited; retry".into()));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            if let Err(error) = check() {
+                if token.cancel() {
+                    return Err(error);
+                }
+                // The action is in flight: report its outcome, not the cancel.
+                let left = deadline.saturating_duration_since(Instant::now());
+                return match answer.recv_timeout(left) {
+                    Ok(result) => result,
+                    Err(_) => {
+                        self.jobs = None;
+                        Err(unconfirmed())
+                    }
+                };
+            }
+            if Instant::now() >= deadline {
+                // Abandon the worker: dropping the sender lets it exit once
+                // its COM call returns. It is never joined.
                 self.jobs = None;
-                Err(Error::Uia("worker thread exited; retry".into()))
+                return Err(if token.cancel() {
+                    Error::Uia(format!(
+                        "no response within {:.1} s; the app may be hung",
+                        timeout.as_secs_f64()
+                    ))
+                } else {
+                    unconfirmed()
+                });
             }
         }
     }
@@ -105,9 +179,11 @@ impl Engine {
         hwnd: isize,
         max_nodes: usize,
         max_depth: usize,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<(Vec<UiNode>, Vec<Option<usize>>, bool)> {
-        self.run(move |com| {
-            let walked = walk(com, hwnd, max_nodes, max_depth)?;
+        self.run(timeout, check, move |com, token| {
+            let walked = walk(com, hwnd, max_nodes, max_depth, None, token)?;
             Ok((walked.nodes, walked.parents, walked.truncated))
         })
     }
@@ -117,68 +193,90 @@ impl Engine {
         hwnd: isize,
         selector: UiSelector,
         limit: usize,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<UiNode> {
-        self.run(move |com| {
-            let walked = walk(com, hwnd, limit, HARD_MAX_DEPTH)?;
+        self.run(timeout, check, move |com, token| {
+            let walked = walk_for(com, hwnd, limit, &selector, token)?;
             let (node, _, _) = walked.pick(&selector)?;
             Ok(node.clone())
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn act(
         &mut self,
         hwnd: isize,
         selector: UiSelector,
         limit: usize,
         action: UiAction,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<UiNode> {
-        self.run(move |com| {
-            let walked = walk(com, hwnd, limit, HARD_MAX_DEPTH)?;
+        self.run(timeout, check, move |com, token| {
+            let walked = walk_for(com, hwnd, limit, &selector, token)?;
             let (node, element, _) = walked.pick(&selector)?;
             require_pattern(node, action)?;
+            token.begin_action()?;
             perform(element, action)?;
             Ok(node.clone())
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn set_value(
         &mut self,
         hwnd: isize,
         selector: UiSelector,
         limit: usize,
         text: String,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<String> {
-        self.run(move |com| {
-            let walked = walk(com, hwnd, limit, HARD_MAX_DEPTH)?;
+        self.run(timeout, check, move |com, token| {
+            let walked = walk_for(com, hwnd, limit, &selector, token)?;
             let (node, element, password) = walked.pick(&selector)?;
             require_value(node)?;
             unsafe {
                 let pattern: IUIAutomationValuePattern = element
                     .GetCurrentPatternAs(UIA_ValuePatternId)
                     .map_err(|e| com_error("ValuePattern", &e))?;
+                token.begin_action()?;
                 pattern
                     .SetValue(&BSTR::from(text.as_str()))
-                    .map_err(|e| com_error("ValuePattern.SetValue", &e))?;
+                    .map_err(|e| action_error("ValuePattern.SetValue", &e))?;
                 if password {
                     return Ok(String::new());
                 }
                 Ok(pattern
                     .CurrentValue()
-                    .map_err(|e| com_error("ValuePattern.CurrentValue", &e))?
+                    .map_err(|e| action_error("ValuePattern.CurrentValue", &e))?
                     .to_string())
             }
         })
     }
 }
 
+/// Walks for `selector`; a RuntimeId selector stops at its element.
+fn walk_for(
+    com: &Com,
+    hwnd: isize,
+    limit: usize,
+    selector: &UiSelector,
+    token: &Token,
+) -> Result<Walked> {
+    let stop = selector.runtime_id.as_deref().filter(|id| !id.is_empty());
+    walk(com, hwnd, limit, HARD_MAX_DEPTH, stop, token)
+}
+
 /// Starts a worker and waits until UI Automation is ready on it.
-fn spawn() -> Result<mpsc::Sender<Job>> {
+fn spawn(wait: Duration) -> Result<mpsc::Sender<Job>> {
     let (jobs, inbox) = mpsc::channel::<Job>();
     let (ready, started) = mpsc::sync_channel::<Result<()>>(1);
     std::thread::Builder::new()
         .name("autogui-uia".into())
         .spawn(move || worker(inbox, ready))?;
-    match started.recv_timeout(INIT_TIMEOUT) {
+    match started.recv_timeout(wait) {
         Ok(Ok(())) => Ok(jobs),
         Ok(Err(error)) => Err(error),
         Err(_) => Err(Error::Uia(
@@ -234,7 +332,8 @@ pub(crate) struct Com {
     children: IUIAutomationCacheRequest,
 }
 
-const PROPERTIES: [UIA_PROPERTY_ID; 15] = [
+const PROPERTIES: [UIA_PROPERTY_ID; 16] = [
+    UIA_RuntimeIdPropertyId,
     UIA_ControlTypePropertyId,
     UIA_NamePropertyId,
     UIA_AutomationIdPropertyId,
@@ -318,6 +417,16 @@ fn com_error(context: &str, error: &windows::core::Error) -> Error {
     }
 }
 
+/// Like [`com_error`] for a call that may already have acted: a UIA timeout
+/// there means the action was sent but its outcome is unknown.
+fn action_error(context: &str, error: &windows::core::Error) -> Error {
+    if error.code().0 as u32 == UIA_E_TIMEOUT {
+        unconfirmed()
+    } else {
+        com_error(context, error)
+    }
+}
+
 /// Reads and frees a VARIANT.
 struct Variant(VARIANT);
 
@@ -326,6 +435,25 @@ impl Variant {
         unsafe {
             let inner = &self.0.Anonymous.Anonymous;
             inner.vt == VT_BOOL && inner.Anonymous.boolVal.0 != 0
+        }
+    }
+    /// A one-dimensional `VT_ARRAY | VT_I4` (RuntimeId), else empty.
+    fn i32_array(&self) -> Vec<i32> {
+        unsafe {
+            let inner = &self.0.Anonymous.Anonymous;
+            if inner.vt != VARENUM(VT_ARRAY.0 | VT_I4.0) {
+                return Vec::new();
+            }
+            let array = inner.Anonymous.parray;
+            if array.is_null() {
+                return Vec::new();
+            }
+            let array = &*array;
+            let count = array.rgsabound[0].cElements as usize;
+            if array.cDims != 1 || array.cbElements != 4 || array.pvData.is_null() || count > 64 {
+                return Vec::new();
+            }
+            std::slice::from_raw_parts(array.pvData as *const i32, count).to_vec()
         }
     }
     fn string(&self) -> Option<String> {
@@ -373,7 +501,8 @@ fn read_node(element: &IUIAutomationElement, index: usize, depth: usize) -> (UiN
             .CachedIsKeyboardFocusable()
             .is_ok_and(|b| b.as_bool());
         let offscreen = element.CachedIsOffscreen().is_ok_and(|b| b.as_bool());
-        let password = element.CachedIsPassword().is_ok_and(|b| b.as_bool());
+        // Fail closed: an unreadable IsPassword counts as a password.
+        let password = element.CachedIsPassword().map_or(true, |b| b.as_bool());
         let mut patterns = Vec::new();
         for (property, pattern) in [
             (UIA_IsInvokePatternAvailablePropertyId, PATTERN_INVOKE),
@@ -404,7 +533,11 @@ fn read_node(element: &IUIAutomationElement, index: usize, depth: usize) -> (UiN
         } else {
             None
         };
+        let runtime_id = cached(element, UIA_RuntimeIdPropertyId)
+            .map(|v| v.i32_array())
+            .unwrap_or_default();
         let node = UiNode {
+            runtime_id,
             index,
             depth,
             role: role_name(control).to_owned(),
@@ -478,7 +611,17 @@ impl Walked {
 
 /// Breadth-first, level by level, over the control view: node indexes are
 /// stable whatever the limits. Never uses FindAll(TreeScope_Subtree).
-fn walk(com: &Com, hwnd: isize, max_nodes: usize, max_depth: usize) -> Result<Walked> {
+fn walk(
+    com: &Com,
+    hwnd: isize,
+    max_nodes: usize,
+    max_depth: usize,
+    stop: Option<&[i32]>,
+    token: &Token,
+) -> Result<Walked> {
+    let found = |walked: &Walked| {
+        stop.is_some_and(|id| walked.nodes.last().is_some_and(|n| n.runtime_id == id))
+    };
     let started = Instant::now();
     let root = unsafe {
         com.automation
@@ -496,6 +639,9 @@ fn walk(com: &Com, hwnd: isize, max_nodes: usize, max_depth: usize) -> Result<Wa
         truncated: false,
     };
     walked.push(root, 0, None);
+    if found(&walked) {
+        return Ok(walked);
+    }
     let mut level_start = 0;
     'walk: for depth in 1..=max_depth.min(HARD_MAX_DEPTH) {
         let level_end = walked.nodes.len();
@@ -503,6 +649,9 @@ fn walk(com: &Com, hwnd: isize, max_nodes: usize, max_depth: usize) -> Result<Wa
             break;
         }
         for parent in level_start..level_end {
+            if token.cancelled() {
+                return Err(Error::Uia("request was cancelled".into()));
+            }
             if walked.nodes.len() >= max_nodes || started.elapsed() > WALK_BUDGET {
                 walked.truncated = true;
                 break 'walk;
@@ -523,6 +672,9 @@ fn walk(com: &Com, hwnd: isize, max_nodes: usize, max_depth: usize) -> Result<Wa
                     break 'walk;
                 }
                 walked.push(kid, depth, Some(parent));
+                if found(&walked) {
+                    break 'walk;
+                }
             }
         }
         level_start = level_end;
@@ -531,35 +683,51 @@ fn walk(com: &Com, hwnd: isize, max_nodes: usize, max_depth: usize) -> Result<Wa
 }
 
 fn perform(element: &IUIAutomationElement, action: UiAction) -> Result<()> {
+    fn pattern<T: Interface>(
+        element: &IUIAutomationElement,
+        id: UIA_PATTERN_ID,
+        name: &str,
+    ) -> Result<T> {
+        unsafe { element.GetCurrentPatternAs::<T>(id) }.map_err(|e| com_error(name, &e))
+    }
     unsafe {
         match action {
-            UiAction::Invoke => element
-                .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
-                .and_then(|p| p.Invoke())
-                .map_err(|e| com_error("InvokePattern.Invoke", &e)),
-            UiAction::Toggle => element
-                .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
-                .and_then(|p| p.Toggle())
-                .map_err(|e| com_error("TogglePattern.Toggle", &e)),
-            UiAction::Select => element
-                .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
-                    UIA_SelectionItemPatternId,
-                )
-                .and_then(|p| p.Select())
-                .map_err(|e| com_error("SelectionItemPattern.Select", &e)),
-            UiAction::Expand => element
-                .GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
-                    UIA_ExpandCollapsePatternId,
-                )
-                .and_then(|p| p.Expand())
-                .map_err(|e| com_error("ExpandCollapsePattern.Expand", &e)),
-            UiAction::Collapse => element
-                .GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
-                    UIA_ExpandCollapsePatternId,
-                )
-                .and_then(|p| p.Collapse())
-                .map_err(|e| com_error("ExpandCollapsePattern.Collapse", &e)),
-            UiAction::Focus => element.SetFocus().map_err(|e| com_error("SetFocus", &e)),
+            UiAction::Invoke => pattern::<IUIAutomationInvokePattern>(
+                element,
+                UIA_InvokePatternId,
+                "InvokePattern",
+            )?
+            .Invoke()
+            .map_err(|e| action_error("InvokePattern.Invoke", &e)),
+            UiAction::Toggle => pattern::<IUIAutomationTogglePattern>(
+                element,
+                UIA_TogglePatternId,
+                "TogglePattern",
+            )?
+            .Toggle()
+            .map_err(|e| action_error("TogglePattern.Toggle", &e)),
+            UiAction::Select => pattern::<IUIAutomationSelectionItemPattern>(
+                element,
+                UIA_SelectionItemPatternId,
+                "SelectionItemPattern",
+            )?
+            .Select()
+            .map_err(|e| action_error("SelectionItemPattern.Select", &e)),
+            UiAction::Expand => pattern::<IUIAutomationExpandCollapsePattern>(
+                element,
+                UIA_ExpandCollapsePatternId,
+                "ExpandCollapsePattern",
+            )?
+            .Expand()
+            .map_err(|e| action_error("ExpandCollapsePattern.Expand", &e)),
+            UiAction::Collapse => pattern::<IUIAutomationExpandCollapsePattern>(
+                element,
+                UIA_ExpandCollapsePatternId,
+                "ExpandCollapsePattern",
+            )?
+            .Collapse()
+            .map_err(|e| action_error("ExpandCollapsePattern.Collapse", &e)),
+            UiAction::Focus => element.SetFocus().map_err(|e| action_error("SetFocus", &e)),
         }
     }
 }
@@ -588,6 +756,30 @@ mod tests {
         assert!(
             matches!(com_error("Walk", &other), Error::Uia(m) if m.starts_with("Walk failed: 0x80004005"))
         );
+    }
+
+    #[test]
+    fn token_lets_only_one_side_win() {
+        let token = Token::default();
+        assert!(token.cancel());
+        assert!(token.cancelled());
+        assert!(token.begin_action().is_err());
+        let token = Token::default();
+        assert!(token.begin_action().is_ok());
+        assert!(!token.cancel(), "an action in flight cannot be cancelled");
+        assert!(!token.cancelled());
+    }
+
+    #[test]
+    fn timeouts_after_an_action_are_unconfirmed() {
+        let hung = windows::core::Error::from_hresult(windows::core::HRESULT(UIA_E_TIMEOUT as i32));
+        assert!(
+            matches!(action_error("InvokePattern.Invoke", &hung), Error::Uia(m) if m.starts_with("unconfirmed:"))
+        );
+        let gone = windows::core::Error::from_hresult(windows::core::HRESULT(
+            UIA_E_ELEMENTNOTAVAILABLE as i32,
+        ));
+        assert!(matches!(action_error("x", &gone), Error::ElementNotFound));
     }
 
     #[test]

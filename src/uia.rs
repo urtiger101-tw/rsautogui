@@ -12,9 +12,17 @@
 // Helpers used only by the COM backend are dead in stub builds.
 #![cfg_attr(not(all(windows, feature = "uia")), allow(dead_code))]
 
+use std::time::Duration;
+
 use crate::error::{Error, Result};
 use crate::types::Rect;
 use crate::window::Window;
+
+/// Longest wait for one request by the plain (non-`_within`) methods.
+pub(crate) const UI_CALL_TIMEOUT: Duration = Duration::from_secs(15);
+/// Message prefix of errors after an action was sent but not confirmed.
+pub(crate) const UNCONFIRMED: &str =
+    "unconfirmed: action sent but unconfirmed; re-observe with ui_snapshot before retrying";
 
 /// Hard cap on nodes visited by one walk, whatever the caller asks for.
 pub(crate) const HARD_MAX_NODES: usize = 5000;
@@ -82,6 +90,9 @@ pub struct UiNode {
     pub patterns: Vec<String>,
     /// ValuePattern value; `None` without a ValuePattern and for passwords.
     pub value: Option<String>,
+    /// UIA RuntimeId: identifies the element while it exists; empty when
+    /// the provider does not report one.
+    pub runtime_id: Vec<i32>,
 }
 
 /// A bounded view of a window's UI Automation tree. The walk is
@@ -112,6 +123,9 @@ pub struct UiSelector {
     pub name_match: NameMatch,
     pub role: Option<String>,
     pub automation_id: Option<String>,
+    /// Exact UIA RuntimeId (from [`UiNode::runtime_id`]); pins the selector
+    /// to that element even when look-alike siblings exist.
+    pub runtime_id: Option<Vec<i32>>,
 }
 
 /// Pattern-based element actions; none of them moves the mouse.
@@ -154,20 +168,12 @@ impl UiAutomation {
 
     /// Walks `window` breadth-first within the option limits.
     pub fn snapshot(&mut self, window: &Window, options: &UiSnapshotOptions) -> Result<UiSnapshot> {
-        validate_options(options)?;
-        window.title()?; // validates the HWND and its original process/thread
-        let (nodes, parents, truncated) =
-            self.engine
-                .walk(window.hwnd(), walk_limit(options), options.max_depth)?;
-        Ok(finish(tree_order(nodes, &parents), truncated, options))
+        self.snapshot_within(window, options, UI_CALL_TIMEOUT, &|| Ok(()))
     }
 
     /// Re-walks `window` and returns the single element matching `selector`.
     pub fn resolve(&mut self, window: &Window, selector: &UiSelector) -> Result<UiNode> {
-        validate_selector(selector)?;
-        window.title()?;
-        self.engine
-            .resolve(window.hwnd(), selector.clone(), resolve_limit(selector))
+        self.resolve_within(window, selector, UI_CALL_TIMEOUT, &|| Ok(()))
     }
 
     /// Resolves `selector` and performs `action` through its UIA pattern.
@@ -178,17 +184,7 @@ impl UiAutomation {
         selector: &UiSelector,
         action: UiAction,
     ) -> Result<UiNode> {
-        validate_selector(selector)?;
-        window.title()?;
-        before_mutation(window)?;
-        let node = self.engine.act(
-            window.hwnd(),
-            selector.clone(),
-            resolve_limit(selector),
-            action,
-        )?;
-        after_mutation(window)?;
-        Ok(node)
+        self.act_within(window, selector, action, UI_CALL_TIMEOUT, &|| Ok(()))
     }
 
     /// Sets the element's ValuePattern value and returns the value read back
@@ -199,6 +195,87 @@ impl UiAutomation {
         selector: &UiSelector,
         text: &str,
     ) -> Result<String> {
+        self.set_value_within(window, selector, text, UI_CALL_TIMEOUT, &|| Ok(()))
+    }
+
+    /// [`snapshot`](Self::snapshot) that waits at most `timeout` and calls
+    /// `check` (cancellation, emergency stop) every few milliseconds while
+    /// the worker runs; the first `check` error is returned at once.
+    pub fn snapshot_within(
+        &mut self,
+        window: &Window,
+        options: &UiSnapshotOptions,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<UiSnapshot> {
+        validate_options(options)?;
+        window.title()?; // validates the HWND and its original process/thread
+        let (nodes, parents, truncated) = self.engine.walk(
+            window.hwnd(),
+            walk_limit(options),
+            options.max_depth,
+            timeout,
+            check,
+        )?;
+        Ok(finish(tree_order(nodes, &parents), truncated, options))
+    }
+
+    /// [`resolve`](Self::resolve) with a `timeout` and a `check` callback.
+    pub fn resolve_within(
+        &mut self,
+        window: &Window,
+        selector: &UiSelector,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<UiNode> {
+        validate_selector(selector)?;
+        window.title()?;
+        self.engine.resolve(
+            window.hwnd(),
+            selector.clone(),
+            resolve_limit(selector),
+            timeout,
+            check,
+        )
+    }
+
+    /// [`act`](Self::act) with a `timeout` and a `check` callback. When
+    /// `check` fails or the timeout passes before the action starts, the
+    /// action is never performed; once it has started, a timeout is an
+    /// "unconfirmed" [`Error::Uia`].
+    pub fn act_within(
+        &mut self,
+        window: &Window,
+        selector: &UiSelector,
+        action: UiAction,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<UiNode> {
+        validate_selector(selector)?;
+        window.title()?;
+        before_mutation(window)?;
+        let node = self.engine.act(
+            window.hwnd(),
+            selector.clone(),
+            resolve_limit(selector),
+            action,
+            timeout,
+            check,
+        )?;
+        after_mutation(window)?;
+        Ok(node)
+    }
+
+    /// [`set_value`](Self::set_value) with a `timeout` and a `check`
+    /// callback, with the same guarantees as [`act_within`](Self::act_within).
+    pub fn set_value_within(
+        &mut self,
+        window: &Window,
+        selector: &UiSelector,
+        text: &str,
+        timeout: Duration,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<String> {
         validate_selector(selector)?;
         window.title()?;
         before_mutation(window)?;
@@ -207,6 +284,8 @@ impl UiAutomation {
             selector.clone(),
             resolve_limit(selector),
             text.to_owned(),
+            timeout,
+            check,
         )?;
         after_mutation(window)?;
         Ok(value)
@@ -403,6 +482,10 @@ fn matches(node: &UiNode, selector: &UiSelector) -> bool {
             .automation_id
             .as_deref()
             .is_none_or(|id| fold(&node.automation_id) == fold(id))
+        && selector
+            .runtime_id
+            .as_deref()
+            .is_none_or(|id| !id.is_empty() && node.runtime_id == id)
 }
 
 pub(crate) fn validate_selector(selector: &UiSelector) -> Result<()> {
@@ -410,6 +493,7 @@ pub(crate) fn validate_selector(selector: &UiSelector) -> Result<()> {
         && selector.name.is_none()
         && selector.role.is_none()
         && selector.automation_id.is_none()
+        && selector.runtime_id.is_none()
     {
         return Err(Error::InvalidArgument(
             "selector needs an index, name, role or automation_id",
@@ -603,27 +687,42 @@ mod platform {
             _: isize,
             _: usize,
             _: usize,
+            _: Duration,
+            _: &dyn Fn() -> Result<()>,
         ) -> Result<(Vec<UiNode>, Vec<Option<usize>>, bool)> {
             match *self {}
         }
-        pub(crate) fn resolve(&mut self, _: isize, _: UiSelector, _: usize) -> Result<UiNode> {
+        pub(crate) fn resolve(
+            &mut self,
+            _: isize,
+            _: UiSelector,
+            _: usize,
+            _: Duration,
+            _: &dyn Fn() -> Result<()>,
+        ) -> Result<UiNode> {
             match *self {}
         }
+        #[allow(clippy::too_many_arguments)]
         pub(crate) fn act(
             &mut self,
             _: isize,
             _: UiSelector,
             _: usize,
             _: UiAction,
+            _: Duration,
+            _: &dyn Fn() -> Result<()>,
         ) -> Result<UiNode> {
             match *self {}
         }
+        #[allow(clippy::too_many_arguments)]
         pub(crate) fn set_value(
             &mut self,
             _: isize,
             _: UiSelector,
             _: usize,
             _: String,
+            _: Duration,
+            _: &dyn Fn() -> Result<()>,
         ) -> Result<String> {
             match *self {}
         }
@@ -647,6 +746,7 @@ pub(crate) mod tests {
             offscreen: false,
             patterns: vec![PATTERN_INVOKE.into()],
             value: None,
+            runtime_id: vec![42, index as i32],
         }
     }
 
@@ -760,6 +860,37 @@ pub(crate) mod tests {
         assert!(matches!(
             select(&nodes, &buttons),
             Err(Error::AmbiguousElement(3))
+        ));
+    }
+
+    #[test]
+    fn runtime_id_pins_against_look_alike_siblings() {
+        let mut nodes = tree();
+        // A look-alike "Save" button now sits at the old index 1; the
+        // original moved to index 9.
+        let mut moved = nodes[1].clone();
+        moved.index = 9;
+        nodes[1].runtime_id = vec![42, 77];
+        nodes.push(moved);
+        let pinned = UiSelector {
+            runtime_id: Some(vec![42, 1]),
+            ..Default::default()
+        };
+        assert_eq!(select(&nodes, &pinned).unwrap(), nodes.len() - 1);
+        let gone = UiSelector {
+            runtime_id: Some(vec![42, 1234]),
+            ..Default::default()
+        };
+        assert!(matches!(select(&nodes, &gone), Err(Error::ElementNotFound)));
+        // An empty RuntimeId never matches (fallback selectors omit it).
+        let empty = UiSelector {
+            runtime_id: Some(Vec::new()),
+            ..Default::default()
+        };
+        nodes[0].runtime_id.clear();
+        assert!(matches!(
+            select(&nodes, &empty),
+            Err(Error::ElementNotFound)
         ));
     }
 

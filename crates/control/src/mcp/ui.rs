@@ -268,7 +268,9 @@ pub(super) fn call(
             let options = snapshot_options(&a)?;
             let window = session.target(&a.target)?;
             check()?;
-            let snapshot = with_automation(session, |_, ui| ui.snapshot(&window, &options))?;
+            let snapshot = with_automation(session, |_, ui| {
+                ui.snapshot_within(&window, &options, command::UI_TIMEOUT, check)
+            })?;
             check()?;
             let generation = session
                 .ui
@@ -308,13 +310,17 @@ pub(super) fn call(
             let selector = session.ui.selector(&a.target, choice)?;
             check()?;
             with_automation(session, |session, ui| {
-                let node = ui.resolve(&window, &selector)?;
+                let node = ui.resolve_within(&window, &selector, command::UI_TIMEOUT, check)?;
                 let method = command::method(&node, action);
                 check()?;
                 let node = match method {
-                    command::Method::Pattern(action) => {
-                        ui.act(&window, &command::pin(&node), action)?
-                    }
+                    command::Method::Pattern(action) => ui.act_within(
+                        &window,
+                        &command::pin(&node),
+                        action,
+                        command::UI_TIMEOUT,
+                        check,
+                    )?,
                     command::Method::Click => {
                         command::real_click(session.gui()?, ui, &window, &node, check)?.0
                     }
@@ -340,9 +346,15 @@ pub(super) fn call(
             let selector = session.ui.selector(&a.target, choice)?;
             check()?;
             with_automation(session, |session, ui| {
-                let node = ui.resolve(&window, &selector)?;
+                let node = ui.resolve_within(&window, &selector, command::UI_TIMEOUT, check)?;
                 check()?;
-                let readback = ui.set_value(&window, &command::pin(&node), &a.text)?;
+                let readback = ui.set_value_within(
+                    &window,
+                    &command::pin(&node),
+                    &a.text,
+                    command::UI_TIMEOUT,
+                    check,
+                )?;
                 // Nodes with a ValuePattern but no value are password fields.
                 let matches = node.value.as_ref().map(|_| readback == a.text);
                 Ok(text(json!({
@@ -398,6 +410,21 @@ mod tests {
     }
 
     #[test]
+    fn unconfirmed_actions_ask_to_re_observe() {
+        let sent = report(&Error::Uia(
+            "unconfirmed: action sent but unconfirmed; re-observe with ui_snapshot before retrying"
+                .into(),
+        ));
+        assert!(sent.hint.contains("re-observe with ui_snapshot"));
+        assert!(!sent.retryable);
+        assert!(
+            report(&Error::Uia("Walk failed".into()))
+                .hint
+                .contains("retry once")
+        );
+    }
+
+    #[test]
     fn element_refs_parse_strictly() {
         assert_eq!(parse_ref("e3-12").unwrap(), (3, 12));
         assert_eq!(parse_ref("e0-0").unwrap(), (0, 0));
@@ -429,6 +456,7 @@ mod tests {
             name_match: NameMatch::Exact,
             role: Some("Button".into()),
             automation_id: None,
+            runtime_id: None,
         };
         let state = UiState {
             automation: None,
@@ -485,6 +513,7 @@ mod tests {
             offscreen: false,
             patterns: vec![],
             value: None,
+            runtime_id: Vec::new(),
         };
         let state = UiState {
             automation: None,
