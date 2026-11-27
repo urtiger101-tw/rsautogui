@@ -53,7 +53,7 @@ foreach ($name in @('install.ps1','uninstall.ps1','install.cmd','ConfigEditor.cs
 }
 Copy-Item -LiteralPath (Join-Path $repo 'skills') -Destination $OutputDir -Recurse
 New-Item -ItemType Directory -Path (Join-Path $OutputDir 'docs') | Out-Null
-foreach ($name in @('agent-installation.md','validation-agent.md','recognition-app-control.md','screensaver.md','virtual-display.md','validation-virtual-display.md','headless.md','performance.md')) {
+foreach ($name in @('agent-installation.md','validation-agent.md','recognition-app-control.md','screensaver.md','virtual-display.md','validation-virtual-display.md','headless.md','performance.md','ui-automation.md')) {
     Copy-Item -LiteralPath (Join-Path $repo "docs\$name") -Destination (Join-Path $OutputDir 'docs')
 }
 New-Item -ItemType Directory -Path (Join-Path $OutputDir 'scripts') | Out-Null
