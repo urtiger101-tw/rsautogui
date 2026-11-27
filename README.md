@@ -120,7 +120,8 @@ cargo build --release --workspace --all-features --locked
 
 `autogui-control mcp` 以換行分隔的 JSON-RPC 透過 stdin/stdout 溝通，沒有 TCP 連接埠。支援協定版本 2024-11-05、2025-03-26、2025-06-18 與 2025-11-25。
 
-- **19 個工具**，涵蓋無人值守就緒檢查（`session_status`）、顯示器與視窗列舉與等待（`displays_list`、`windows_list`、`window_wait`）、指定顯示器截圖（`display_capture`、`window_to_display`）、Win32 控制（`window_control`）、啟動程式（`app_launch`）、截圖與找圖（`capture`、`locate`、`click_image`）、座標操作（`click_at`、`pointer_move`、`drag`、`scroll`、`cursor_position`）、文字與快捷鍵（`type_text`、`hotkey`）及螢幕保護程式（`screensaver`）。
+- **27 個工具**，涵蓋無人值守就緒檢查（`session_status`）、顯示器與視窗列舉與等待（`displays_list`、`windows_list`、`window_wait`）、指定顯示器截圖（`display_capture`、`window_to_display`）、Win32 控制（`window_control`）、啟動程式（`app_launch`）、**UI Automation 樹與元素操作**（`ui_snapshot`、`ui_click`、`ui_set_value`、`ui_wait`）、截圖與找圖（`capture`、`locate`、`click_image`）、畫面變化等待（`wait_change`）、座標操作（`click_at`、`pointer_move`、`drag`、`drag_path`、`scroll`、`cursor_position`）、文字與快捷鍵（`type_text`、`paste_text`、`hotkey`）、批次步驟（`run`，1–8 步）及螢幕保護程式（`screensaver`）。
+- **緊急停止**：按 **Ctrl+Alt+F12** 後，此 MCP 連線拒絕所有輸入工具（錯誤碼 `stopped`）直到重新啟動；觀察類工具照常。以 `GetAsyncKeyState` 輪詢三個按鍵，不安裝鍵盤 hook，也不記錄按鍵。它補充、不取代主螢幕角落 fail-safe。
 - 每個工具都有 `title` 與 `outputSchema`；伺服器的 `serverInfo.title` 為 `AutoGui Windows Control`。
 - **`structuredContent`**：協定 2025-06-18 以上會同時回傳結構化結果；文字區塊一律保留，舊版用戶端仍可讀取。
 - **結構化錯誤**：工具執行失敗時 `isError: true`，`structuredContent` 內含 `{code, message, hint, retryable}`。`retryable` 表示「不改參數重試，之後可能成功」。
@@ -232,6 +233,9 @@ fn main() -> Result<()> {
     // gui.click()?;
     // gui.write("Hello", Duration::from_millis(50))?;
     // gui.hotkey(&["ctrl", "c"])?;
+    // gui.paste("多語言 text ✓", true)?;                       // clipboard entry, restored
+    // let stroke = [Point::new(100, 100), Point::new(160, 140), Point::new(220, 100)];
+    // gui.drag_path(&stroke, Duration::from_millis(600), MouseButton::Left)?;
 
     let options = LocateOptions::default();
     // let button = gui.locate_center_on_screen("button.png", &options)?;
@@ -243,7 +247,7 @@ fn main() -> Result<()> {
 }
 ```
 
-**Fail-safe is on by default.** Mutating and screen-search calls check the configured primary-monitor corners before and after work, and during long searches, drags, repeated inputs and input intervals. Move the cursor to a corner to interrupt. New actions stop; key/button releases still run so input does not remain held. Every public mutating call also observes `Settings::pause`.
+**Emergency stop: Ctrl+Alt+F12.** With `Settings::stop_key` (default on) every mutating call returns `Error::Stopped` while the chord is held, and the MCP server latches it for the connection. **Fail-safe is on by default.** Mutating and screen-search calls check the configured primary-monitor corners before and after work, and during long searches, drags, repeated inputs and input intervals. Move the cursor to a corner to interrupt. New actions stop; key/button releases still run so input does not remain held. Every public mutating call also observes `Settings::pause`.
 
 `autogui::prelude` exports the common types (`AutoGui`, `LocateOptions`, `Rect`, `Box`, `Point`, `Size`, `Settings`, `Window`, `Error`, `Result`, and others). Tween functions live in `autogui::tweens`.
 
@@ -254,6 +258,8 @@ fn main() -> Result<()> {
 | Mouse and keyboard (`os`) | Enigo | Enigo; Accessibility permission may be required | Enigo; X11 supported, Wayland depends on compositor permissions |
 | Screenshot and image locate | XCap, PNG/JPEG/BMP/PPM files | XCap | XCap; Wayland capture support depends on the desktop portal |
 | Window control | Win32 | `UnsupportedPlatform` | `UnsupportedPlatform` |
+| UI Automation (`uia`) | COM `IUIAutomation` | `UnsupportedPlatform` | `UnsupportedPlatform` |
+| Clipboard text (`paste`) | Win32 clipboard | `UnsupportedPlatform` | `UnsupportedPlatform` |
 
 Windows coordinate operations temporarily use a per-monitor DPI-aware thread context and restore the caller's context afterward; they do not change process-wide DPI settings. This path requires Windows 10 1703 or newer. Window activation restores minimized windows and confirms foreground ownership. Show/move/resize requests use asynchronous dispatch and verify the resulting state; application size constraints can cause an error. `close()` posts a close request, which a target app can veto with a save dialog.
 

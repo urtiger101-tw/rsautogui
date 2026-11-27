@@ -21,6 +21,12 @@ Read the `executable` property from `../runtime.json` (created by the installer)
 & $exe locate 'Unique Editor title' 'C:\templates\button.png' 0.95 5 1
 & $exe click 'Unique Editor title' 'C:\templates\button.png' 0.95 5 1
 & $exe type 'Unique Editor title' 'Hello 世界'
+& $exe paste 'Unique Editor title' 'Long text, emoji ✓ and 多語言'
+& $exe ui snapshot 'Unique Editor title' --max-nodes 200
+& $exe ui click 'Unique Editor title' --name Save --role Button
+& $exe ui set-value 'Unique Editor title' --id FileNameBox --text 'C:\out\a.txt'
+& $exe ui wait 'Unique Editor title' --text Done --timeout 30
+& $exe ui wait 'Unique Editor title' --text Loading --gone
 & $exe window move 'Unique Editor title' 100 100
 & $exe window resize 'Unique Editor title' 900 700
 & $exe window minimize 'Unique Editor title'
@@ -32,6 +38,8 @@ Read the `executable` property from `../runtime.json` (created by the installer)
 `list` prints `hwnd`, rectangle, title, pid, full process path and window class (tab-separated; pid/path/class are empty when Windows denies the lookup). `--process` matches the executable base name case-insensitively (`.exe` optional); `--foreground` keeps only the active window. `wait <title> [present|absent|foreground] [timeout seconds, default 10]` polls every 100 ms, prints the matches and exits 1 on timeout; the title may be `''` when `--process` is given. There is no CLI launch command: `app_launch` exists only over MCP and requires `AUTOGUI_ALLOW_LAUNCH=1` in the MCP server environment.
 
 CLI title selectors are case-insensitive substrings and must match exactly one visible window. CLI `pause` blocks until timer, Ctrl+C or another `resume`. MCP `pause` is asynchronous and connection-owned. `hide` can only be reversed through the retained MCP reference or another mechanism because CLI lists visible windows.
+
+`ui snapshot|click|set-value|wait <title>` reads or acts on the window's UI Automation tree. Selectors: `--name` (case-insensitive substring; `--exact` for a whole-name match), `--role` (e.g. `Button`, `Edit`, `MenuItem`), `--id` (AutomationId); `ui snapshot` also takes `--query`, `--role`, `--max-nodes`, `--max-depth`. `ui click --action auto|invoke|click|toggle|select|expand|collapse|focus` defaults to `auto`. `ui wait --text T [--gone] [--abort-on T]... [--timeout S]` exits 4 on timeout. Several matches exit 1 (narrow the selector), none exits 3. `paste <title> <text>` enters text through the clipboard and restores the previous clipboard text. `drag_path`, `wait_change` and `run` exist only over MCP.
 
 `capture`, `locate` and `click` accept a final `--display <exact device name>` option. Recognition results then use global Windows desktop physical pixels, possibly negative; do not multiply them by DPI. The default remains primary-monitor capture. Driver installation is separate; see `docs/virtual-display.md` in the installed program directory. Shared cursor/focus and primary-monitor corner fail-safe remain in effect.
 
@@ -52,11 +60,11 @@ CLI title selectors are case-insensitive substrings and must match exactly one v
 | 6 | fail-safe triggered: the cursor reached a primary-monitor corner |
 | 70 | internal error |
 
-Retry 3 and 4 only after re-observing the window or screen. Codes 2 and 5 need a changed request or a changed environment. Code 6 means the operator moved the cursor to a corner on purpose; do not continue input until the user confirms.
+Retry 3 and 4 only after re-observing the window or screen. Codes 2 and 5 need a changed request or a changed environment. Code 6 means the operator moved the cursor to a corner on purpose; do not continue input until the user confirms. Pressing **Ctrl+Alt+F12** also stops input (exit 5, `stopped`); report it and do not resume on your own.
 
 ## Global flags
 
-`--json` (for `doctor`, `session status`, `list`, `wait`, `capture`, `type`, `locate`, `click`, `mcp config` and `-V`; errors are written as JSON to stderr), `--quiet`, `--no-color` (also `NO_COLOR`), `--lang en|zh` (also `AUTOGUI_LANG`, then the Windows UI language), `-V`/`--version`, `-h`/`--help` and `help <command>`. Global flags work before the command word, and after it for every command except `type`, whose text is typed verbatim (`& $exe type Notepad --json` types `--json`). Text after `--` is always positional. `--doctor` is an alias for `doctor`.
+`--json` (for `doctor`, `session status`, `list`, `wait`, `capture`, `type`, `locate`, `click`, `mcp config` and `-V`; errors are written as JSON to stderr), `--quiet`, `--no-color` (also `NO_COLOR`), `--lang en|zh` (also `AUTOGUI_LANG`, then the Windows UI language), `-V`/`--version`, `-h`/`--help` and `help <command>`. Global flags work before the command word, and after it for every command except `type` and `paste`, whose text is entered verbatim (`& $exe type Notepad --json` types `--json`). Text after `--` is always positional. `--doctor` is an alias for `doctor`.
 
 ## Doctor and MCP helpers
 
