@@ -25,7 +25,7 @@
 |---|---|---|
 | Codex | `$CODEX_HOME/skills`，預設 `~/.codex/skills` | 用已安裝的 `codex mcp add` 更新 `$CODEX_HOME/config.toml` |
 | Claude Code | `~/.claude/skills` | `~/.claude.json` 的 `mcpServers.autogui` |
-| Claude Desktop | 不安裝 Skill（只支援 MCP） | `%APPDATA%\Claude\claude_desktop_config.json` 的 `mcpServers.autogui` |
+| Claude Desktop | 不安裝 Skill（只支援 MCP） | `%APPDATA%\Claude\claude_desktop_config.json` 的 `mcpServers.autogui`；Microsoft Store 版改用 `%LOCALAPPDATA%\Claude-Datanthropicpbc.claude_*\claude_desktop_config.json`（存在時優先） |
 | OpenCode | `$XDG_CONFIG_HOME/opencode/skills`，預設 `~/.config/opencode/skills` | 同目錄 `opencode.jsonc`（若存在）或 `opencode.json` 的 `mcp.autogui` |
 | AGY App／CLI | `~/.gemini/config/skills`（共用全域目錄） | `~/.gemini/config/mcp_config.json` 的 `mcpServers.autogui` |
 

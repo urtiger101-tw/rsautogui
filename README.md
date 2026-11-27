@@ -31,7 +31,7 @@ $exe = "$env:LOCALAPPDATA\Programs\AutoGui\autogui-control.exe"
 | Agent | 產生片段 | 要做的事 |
 |---|---|---|
 | Claude Code | `mcp config --host claude-code` | 執行 `claude mcp add --scope user autogui -- "<exe>" mcp`，或合併到 `~/.claude.json` |
-| Claude Desktop | `mcp config --host claude-desktop` | 合併到 `%APPDATA%\Claude\claude_desktop_config.json` 的 `mcpServers`，然後重新啟動 Claude Desktop |
+| Claude Desktop | `mcp config --host claude-desktop` | 合併到 `%APPDATA%\Claude\claude_desktop_config.json`（Microsoft Store 版為 `%LOCALAPPDATA%\Claude-Datanthropicpbc.claude_*\claude_desktop_config.json`）的 `mcpServers`，然後重新啟動 Claude Desktop |
 | Codex | `mcp config --host codex` | 加入 `~/.codex/config.toml` 的 `[mcp_servers.autogui]` |
 | OpenAI Agents SDK | `mcp config --host openai-agents` | 使用 `MCPServerStdio`；`client_session_timeout_seconds=60`，因為 `window_wait` 最長可等 30 秒 |
 | OpenCode | `mcp config --host opencode` | 合併到 `~/.config/opencode/opencode.json` 的 `mcp` |
