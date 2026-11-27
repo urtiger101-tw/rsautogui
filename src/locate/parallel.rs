@@ -225,8 +225,26 @@ mod tests {
         );
     }
 
+    /// Keeps the default panic hook quiet for this module's deliberate
+    /// "fake job failure" panics. With RUST_BACKTRACE=1 (as in CI) the
+    /// default hook symbolizes a backtrace *before* unwinding starts, which
+    /// can take seconds and lets the other bands finish, so the "stops the
+    /// other bands" assertions would measure the hook instead of the code.
+    fn quiet_fake_panics() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                if info.payload().downcast_ref::<&str>() != Some(&"fake job failure") {
+                    previous(info);
+                }
+            }));
+        });
+    }
+
     #[test]
     fn panic_in_callers_band_stops_workers() {
+        quiet_fake_panics();
         let visited = std::sync::atomic::AtomicUsize::new(0);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             parallel_bands(
@@ -252,6 +270,7 @@ mod tests {
 
     #[test]
     fn panic_in_worker_band_stops_caller_and_other_workers() {
+        quiet_fake_panics();
         let visited = std::sync::atomic::AtomicUsize::new(0);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             parallel_bands(
