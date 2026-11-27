@@ -1,6 +1,6 @@
 [package]
 name = "autogui-control-core"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "Windows CLI and MCP tool logic behind autogui-control"
