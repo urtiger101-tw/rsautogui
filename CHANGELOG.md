@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.3.0 — 2026-11-27
+## 0.3.0 — 2026-11-28
 
 Features compared against Antigravity Computer Use: accessibility-tree control, change waits, batches, path strokes, clipboard entry and a one-chord emergency stop.
 
@@ -10,6 +10,8 @@ Features compared against Antigravity Computer Use: accessibility-tree control, 
 
 - **UI Automation**: agents read a window's accessibility tree and act on elements by ref, name, role or AutomationId instead of guessing pixels.
 - **Emergency stop**: **Ctrl+Alt+F12** stops all input for the MCP connection until the server restarts, alongside the corner fail-safe. It is read by `GetAsyncKeyState` polling; there is still no keyboard hook and nothing is recorded.
+- **"Computer use! Don't move!" notice**: while an agent works through MCP, a translucent blue, click-through notice at the top centre of the primary monitor tells people not to touch the mouse and shows the stop chord. It never takes focus and is excluded from screenshots.
+- **Action log** (on by default): every MCP tool call and CLI command is appended to `%LOCALAPPDATA%\AutoGui\logs\actions-YYYY-MM-DD.jsonl`; typed and pasted text is reduced to a character count. Switch it off with `autogui-control settings action-log off`.
 - **Fewer round trips**: `run` executes 1–8 steps per call; `ui_wait` and `wait_change` replace sleep-and-capture loops.
 
 ### Added
@@ -24,6 +26,7 @@ Features compared against Antigravity Computer Use: accessibility-tree control, 
   - `paste_text`: clipboard entry with restore of the previous text.
   - `run`: batched steps; `"$last"` capture ids; stops at the first failure.
 - MCP error codes `element_not_found`, `ambiguous_element` and `stopped`.
+- CLI `settings [overlay on|off] [action-log on|off]` with `%LOCALAPPDATA%\AutoGui\settings.json`; `AUTOGUI_OVERLAY` / `AUTOGUI_ACTION_LOG` override it per process. Logs older than 30 days are deleted automatically.
 - CLI: `ui snapshot|click|set-value|wait <title>` and `paste <title> <text>`, with bilingual help.
 - Library:
   - Types and client: `UiAutomation`, `UiSnapshot`, `UiNode`, `UiSelector`, `NameMatch`, `UiAction`, `UiSnapshotOptions` (feature `uia`, Windows only, COM on one MTA worker with call timeouts).

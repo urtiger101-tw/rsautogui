@@ -122,6 +122,8 @@ cargo build --release --workspace --all-features --locked
 
 - **27 個工具**，涵蓋無人值守就緒檢查（`session_status`）、顯示器與視窗列舉與等待（`displays_list`、`windows_list`、`window_wait`）、指定顯示器截圖（`display_capture`、`window_to_display`）、Win32 控制（`window_control`）、啟動程式（`app_launch`）、**UI Automation 樹與元素操作**（`ui_snapshot`、`ui_click`、`ui_set_value`、`ui_wait`）、截圖與找圖（`capture`、`locate`、`click_image`）、畫面變化等待（`wait_change`）、座標操作（`click_at`、`pointer_move`、`drag`、`drag_path`、`scroll`、`cursor_position`）、文字與快捷鍵（`type_text`、`paste_text`、`hotkey`）、批次步驟（`run`，1–8 步）及螢幕保護程式（`screensaver`）。
 - **緊急停止**：按 **Ctrl+Alt+F12** 後，此 MCP 連線拒絕所有輸入工具（錯誤碼 `stopped`）直到重新啟動；觀察類工具照常。以 `GetAsyncKeyState` 輪詢三個按鍵，不安裝鍵盤 hook，也不記錄按鍵。它補充、不取代主螢幕角落 fail-safe。
+- **操作提示視窗**：Agent 透過 MCP 操作時，主螢幕上方中央會出現半透明藍色小視窗「**Computer use! Don't move!**」，下方提示 Ctrl+Alt+F12 可緊急停止。它不搶焦點、滑鼠可直接穿透點擊、不會出現在截圖中，也不在 `windows_list` 內；最後一次工具呼叫 15 秒後自動隱藏，緊急停止或連線結束時立即隱藏。
+- **動作紀錄**（預設開啟）：每次 MCP 工具呼叫與 CLI 命令寫入 `%LOCALAPPDATA%\AutoGui\logs\actions-YYYY-MM-DD.jsonl`（一行一筆 JSON，本機時間）。輸入或貼上的文字只記字數（`"[N chars]"`），保留 30 天，從不上傳。見下方〈操作提示與動作紀錄〉。
 - 每個工具都有 `title` 與 `outputSchema`；伺服器的 `serverInfo.title` 為 `AutoGui Windows Control`。
 - **`structuredContent`**：協定 2025-06-18 以上會同時回傳結構化結果；文字區塊一律保留，舊版用戶端仍可讀取。
 - **結構化錯誤**：工具執行失敗時 `isError: true`，`structuredContent` 內含 `{code, message, hint, retryable}`。`retryable` 表示「不改參數重試，之後可能成功」。
@@ -149,6 +151,29 @@ cargo build --release --workspace --all-features --locked
 **重要**：`click_at`、`pointer_move`、`drag`、`scroll` 使用最近一次 `capture` 或 `display_capture` 的 `capture_id`（60 秒內有效、單次使用）與截圖內座標。任何嘗試都會消耗憑證；輸入後應重新擷取，確認實際結果。輸入送出不代表任務完成。
 
 `app_launch` 預設停用，只有 MCP 程序設定 `AUTOGUI_ALLOW_LAUNCH=1` 時才會啟動既存的絕對路徑 `.exe`。Agent 適用的操作 Skill 隨包提供；指定顯示器與選配驅動見 [虛擬顯示器指南](docs/virtual-display.md)。
+
+## 操作提示與動作紀錄
+
+兩者預設開啟，以 `settings` 命令切換，設定存於 `%LOCALAPPDATA%\AutoGui\settings.json`，執行中的 MCP 伺服器在下一次工具呼叫即套用，不需重新啟動：
+
+```powershell
+autogui-control settings                     # 顯示目前狀態、設定檔與紀錄資料夾
+autogui-control settings action-log off      # 關閉動作紀錄
+autogui-control settings overlay off         # 關閉「Computer use! Don't move!」提示視窗
+autogui-control settings overlay on action-log on
+```
+
+單一 MCP 主機可在其設定的 `env` 中以 `AUTOGUI_OVERLAY=0|1`、`AUTOGUI_ACTION_LOG=0|1` 覆寫設定檔。MCP 工具無法變更這兩項設定，Agent 不能自行關閉提示或紀錄。
+
+紀錄範例（每行一筆）：
+
+```json
+{"ts":"2026-11-28T01:26:41.105+08:00","pid":31332,"args":{"capture_id":"c7","target":"w3-1","x":120,"y":48},"ms":64,"ok":true,"source":"mcp","tool":"click_at","window":"未命名 - 記事本"}
+{"ts":"2026-11-28T01:26:42.010+08:00","pid":31332,"args":{"target":"w3-1","text":"[12 chars]"},"ms":210,"ok":true,"source":"mcp","tool":"type_text","window":"未命名 - 記事本"}
+{"ts":"2026-11-28T01:26:43.500+08:00","pid":40112,"args":["type","Notepad","[9 chars]"],"code":"window_not_found","command":"type","error":"window not found","ms":1,"ok":false,"source":"cli"}
+```
+
+欄位：`ts`（本機時間）、`pid`、`source`（`mcp`／`cli`）、`tool` 或 `command`、`window`（目標視窗標題，已知時）、`args`（字串最多 300 字元）、`in_run`（`run` 批次中的步驟）、`ms`、`ok`，失敗時加 `code` 與 `error`。`type_text`、`paste_text`、`ui_set_value`、格式錯誤的呼叫與未知工具，除選擇器（`target`、`element`、`name`、`role`、`automation_id`）外所有字串都只記字數；`app_launch` 的程式參數只記個數；`settings` 的變更本身也會記錄（在生效前寫入）。不記錄截圖內容。寫入失敗不會讓操作失敗。
 
 ## 虛擬顯示器
 

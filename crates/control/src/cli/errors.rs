@@ -32,7 +32,7 @@ pub(crate) fn exit_code(error: &Error) -> i32 {
     }
 }
 
-fn kind(error: &Error) -> &'static str {
+pub(crate) fn kind(error: &Error) -> &'static str {
     match error {
         Error::FailSafe(_) => "fail_safe",
         Error::ImageNotFound => "image_not_found",

@@ -104,6 +104,16 @@ cargo build --release --workspace --all-features --locked
 
 `click_at {target,capture_id,x,y}` 與 `scroll {target,capture_id,x,y,clicks,horizontal?}` 使用最近一次 `capture` 的 PNG 相對座標及一次性憑證（60 秒過期）。任何嘗試均消耗憑證；其他工具呼叫除 `session_status` 外亦使憑證失效，請操作後重新擷取。輸入前後檢查目標、前景、視窗／顯示器幾何、游標及點周圍最多 32×32 像素。hover 變色時先重新擷取；局部範圍外與最後檢查後的畫面變化仍須由操作者確認。詳見[座標操作說明](recognition-app-control.md#mcp-截圖座標操作與長文字)。
 
+## 操作提示視窗與動作紀錄
+
+- **提示視窗**：MCP 工具執行時，主螢幕上方中央顯示半透明藍色「Computer use! Don't move!」，第二行為「按 Ctrl+Alt+F12 緊急停止」（依 Windows 介面語言）。視窗為 `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOPMOST`，不接收滑鼠、不搶焦點；以 `WDA_EXCLUDEFROMCAPTURE` 排除於截圖之外（Windows 10 2004 以上）；`windows_list` 也會略過它。最後一次工具呼叫 15 秒後自動隱藏；緊急停止或連線關閉立即隱藏。
+- **動作紀錄**：每次 MCP 工具呼叫（包含 `run` 的每一步）與 CLI 命令寫入 `%LOCALAPPDATA%\AutoGui\logs\actions-YYYY-MM-DD.jsonl`。`type_text`、`paste_text`、`ui_set_value` 與 CLI `type`／`paste`／`ui set-value` 的文字只記錄字數（格式錯誤的呼叫除選擇器外全部只記字數），`app_launch` 參數只記個數，`settings` 變更也會記錄；其他字串截斷為 300 字元；不記錄截圖。超過 30 天的檔案自動刪除。紀錄只存在本機，解除安裝不會刪除（屬於使用者資料，可手動刪除 `%LOCALAPPDATA%\AutoGui`）。
+- **設定**：`autogui-control settings [overlay on|off] [action-log on|off]`，存於 `%LOCALAPPDATA%\AutoGui\settings.json`，兩者預設開啟；設定檔損毀時視為預設值（不會因此關閉紀錄）。個別主機可在 MCP 設定的 `env` 加上 `AUTOGUI_OVERLAY` 或 `AUTOGUI_ACTION_LOG`（`0`／`1`）覆寫，例如 Claude Code 的 `~/.claude.json`：
+
+```json
+"autogui": {"command": "C:\\Users\\<you>\\AppData\\Local\\Programs\\AutoGui\\autogui-control.exe", "args": ["mcp"], "env": {"AUTOGUI_ACTION_LOG": "0"}}
+```
+
 ## Windows API
 
 `window`/`window_control` 使用 `EnumWindows`、`GetWindowTextW`、`SetForegroundWindow`、`ShowWindow`、`SetWindowPos`、`PostMessageW(WM_CLOSE)`。`move`/`resize` 讀回幾何；Window 保存 HWND 的原程序/執行緒身分。一般鍵鼠透過 Enigo 使用 Win32 輸入；指定顯示器的點擊使用 `SendInput` 的 `MOUSEEVENTF_VIRTUALDESK`。預設主螢幕，可明確指定實體／虛擬顯示器，座標為桌面實體像素；不提供 OCR、UI Automation 控制樹、任意 SendMessage 或提權/解鎖。

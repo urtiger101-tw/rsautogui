@@ -7,7 +7,7 @@ use crate::desktop;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod args;
-mod errors;
+pub(crate) mod errors;
 pub(crate) mod lang;
 
 use lang::tr;
@@ -251,6 +251,9 @@ fn run(mut args: Vec<String>) -> autogui::Result<()> {
     }
     if args[0] == "ui" {
         return crate::commands::ui::run(&args[1..], json_output());
+    }
+    if args[0] == "settings" {
+        return crate::commands::settings::run(&args[1..], json_output());
     }
     // Diagnostics must work even when the input backend cannot start.
     if args[0] == "session" {
@@ -513,7 +516,10 @@ pub fn run_cli() -> i32 {
     let (globals, rest) = args::split(&raw);
     QUIET.store(globals.quiet, Ordering::Relaxed);
     JSON.store(globals.json, Ordering::Relaxed);
-    match run(rest) {
+    let started = std::time::Instant::now();
+    let result = run(rest.clone());
+    crate::action_log::record_cli(&rest, &result, started.elapsed());
+    match result {
         Ok(()) => 0,
         Err(error) => errors::report(&error, globals.json),
     }
