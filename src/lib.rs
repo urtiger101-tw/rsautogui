@@ -55,6 +55,9 @@ pub mod stop;
 pub use diff::FrameDiff;
 
 // --- 0.3.0 WP-C: clipboard (src/clipboard.rs, src/clipboard_win.rs; SPEC §20) ---
+pub mod clipboard;
+#[cfg(windows)]
+mod clipboard_win;
 
 // --- end 0.3.0 modules ---
 
