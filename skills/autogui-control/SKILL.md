@@ -20,6 +20,8 @@ Prefer the installed `autogui` MCP server. If tools are unavailable, read `runti
 
 **Emergency stop.** If any tool returns `stopped`, the user pressed **Ctrl+Alt+F12**. Say so plainly ("You pressed Ctrl+Alt+F12, so I stopped after …"), never call it a clean finish, and do not continue input: the MCP server refuses input until it is restarted. Observation tools still work.
 
+**What the user sees.** While you work through MCP, a translucent blue notice "Computer use! Don't move!" sits at the top centre of the primary monitor (click-through, never focused, absent from your captures and from `windows_list`), and every tool call is written to the user's local action log with typed or pasted text reduced to a character count. Both are the user's settings (`autogui-control settings`); never try to turn them off or work around them.
+
 ## Tools
 
 - `session_status {}`: read-only readiness check for unattended use (session, console/RDP, lock, input desktop, cursor, displays, capture probe) with `ready` and blocker/warning codes.

@@ -66,6 +66,10 @@ Retry 3 and 4 only after re-observing the window or screen. Codes 2 and 5 need a
 
 `--json` (for `doctor`, `session status`, `list`, `wait`, `capture`, `type`, `locate`, `click`, `mcp config` and `-V`; errors are written as JSON to stderr), `--quiet`, `--no-color` (also `NO_COLOR`), `--lang en|zh` (also `AUTOGUI_LANG`, then the Windows UI language), `-V`/`--version`, `-h`/`--help` and `help <command>`. Global flags work before the command word, and after it for every command except `type` and `paste`, whose text is entered verbatim (`& $exe type Notepad --json` types `--json`). Text after `--` is always positional. `--doctor` is an alias for `doctor`.
 
+## Settings
+
+`settings` shows whether the "Computer use! Don't move!" notice and the action log are on (both default on), the settings file (`%LOCALAPPDATA%\AutoGui\settings.json`) and the log folder (`%LOCALAPPDATA%\AutoGui\logs`, one `actions-YYYY-MM-DD.jsonl` per day, kept 30 days). `settings overlay on|off` and `settings action-log on|off` change them for the user; only run them when the user asks. `AUTOGUI_OVERLAY` and `AUTOGUI_ACTION_LOG` (`0`/`1`) override the file for one process. CLI commands are logged too, with `type`/`paste`/`ui set-value` text reduced to `[N chars]`.
+
 ## Doctor and MCP helpers
 
 - `doctor` is read-only: DLL and ABI, EXE/DLL versions, session readiness, fail-safe, `app_launch` state, host registrations (Claude Code, Claude Desktop, Codex, OpenCode, AGY), the Skill's `runtime.json` and an MCP self-handshake. It exits 5 when any check fails.

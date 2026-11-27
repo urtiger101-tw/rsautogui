@@ -15,6 +15,9 @@ function StartMcp([string]$Path) {
     $start.RedirectStandardError=$true
     # app_launch must stay disabled by default regardless of the caller's environment.
     [void]$start.EnvironmentVariables.Remove('AUTOGUI_ALLOW_LAUNCH')
+    # Tests never show the on-screen notice or write the user's action log.
+    $start.EnvironmentVariables['AUTOGUI_OVERLAY']='0'
+    $start.EnvironmentVariables['AUTOGUI_ACTION_LOG']='0'
     $start.StandardOutputEncoding=[Text.Encoding]::UTF8
     $start.StandardErrorEncoding=[Text.Encoding]::UTF8
     $process=New-Object Diagnostics.Process

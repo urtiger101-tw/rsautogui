@@ -14,6 +14,9 @@ impl Client {
     pub fn start(path: &str) -> Self {
         let mut child = Command::new(path)
             .arg("mcp")
+            // Tests never show the on-screen notice or write the user's action log.
+            .env("AUTOGUI_OVERLAY", "0")
+            .env("AUTOGUI_ACTION_LOG", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

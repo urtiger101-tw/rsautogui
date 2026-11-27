@@ -129,6 +129,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         example: "ui click Notepad --name Save --role Button",
     },
     CommandSpec {
+        name: "settings",
+        usage: "settings [overlay on|off] [action-log on|off]",
+        summary: t(
+            "Show or change the \"Computer use! Don't move!\" notice and the local action log (both on by default)",
+            "顯示或變更「Computer use! Don't move!」提示視窗與本機動作紀錄（預設皆開啟）",
+        ),
+        example: "settings action-log off",
+    },
+    CommandSpec {
         name: "window",
         usage: "window <inspect|activate|minimize|maximize|restore|show|hide|move|resize|close> <title> [x y|width height]",
         summary: t(

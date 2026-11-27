@@ -491,6 +491,19 @@ pub struct Session {
     stop: StopLatch,
     /// UI Automation client and element refs (`mcp/ui.rs`).
     pub(super) ui: super::ui::UiState,
+    /// Nesting depth of `call`; above zero while `run` executes its steps.
+    depth: u32,
+    /// Hides the on-screen notice when the connection ends.
+    _notice: NoticeGuard,
+}
+
+#[derive(Default)]
+struct NoticeGuard;
+
+impl Drop for NoticeGuard {
+    fn drop(&mut self) {
+        crate::overlay::hide();
+    }
 }
 
 /// Tools that never send input or change windows; they keep working after
@@ -534,9 +547,11 @@ impl Session {
     /// Replaces all window targets with a new generation, like windows_list.
     fn register(
         &mut self,
-        windows: Vec<Window>,
+        mut windows: Vec<Window>,
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Vec<Value>> {
+        // The "Computer use! Don't move!" notice is never a target.
+        windows.retain(|w| !crate::overlay::is_overlay(w.hwnd()));
         if windows.len() > 512 {
             return Err(Error::InvalidArgument("over 512 windows; filter by title"));
         }
@@ -575,7 +590,42 @@ impl Session {
         display.validate()?;
         Ok(display.clone())
     }
+    /// Runs one MCP tool. Shows the on-screen notice and writes the action
+    /// log (SPEC §22) around [`dispatch`](Self::dispatch); `run` steps come
+    /// back through here, so each step is logged on its own.
     pub fn call(
+        &mut self,
+        name: &str,
+        args: Value,
+        check: &dyn Fn() -> Result<()>,
+    ) -> Result<Value> {
+        let started = Instant::now();
+        let config = crate::user_config::load();
+        if config.overlay && !self.stop.tripped() {
+            crate::overlay::touch();
+        }
+        let logged = config.action_log.then(|| {
+            let window = args
+                .get("target")
+                .and_then(Value::as_str)
+                .and_then(|key| self.targets.get(key))
+                .and_then(|w| w.title().ok());
+            (window, crate::action_log::redact_tool_args(name, &args))
+        });
+        let in_run = self.depth > 0;
+        self.depth += 1;
+        let result = self.dispatch(name, args, check);
+        self.depth -= 1;
+        if self.stop.tripped() {
+            crate::overlay::hide();
+        }
+        if let Some((window, args)) = logged {
+            crate::action_log::record_tool(name, window, args, &result, started.elapsed(), in_run);
+        }
+        result
+    }
+
+    fn dispatch(
         &mut self,
         name: &str,
         args: Value,
