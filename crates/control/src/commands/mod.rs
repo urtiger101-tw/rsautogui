@@ -2,4 +2,5 @@
 pub(crate) mod display;
 pub(crate) mod screensaver;
 pub(crate) mod session;
+pub(crate) mod ui;
 pub(crate) mod window;

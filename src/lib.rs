@@ -47,6 +47,12 @@ pub mod tweens {
 }
 
 // --- 0.3.0 WP-A: UI Automation (src/uia.rs, src/uia_win.rs; SPEC §18) ---
+mod uia;
+#[cfg(all(windows, feature = "uia"))]
+mod uia_win;
+pub use uia::{
+    NameMatch, UiAction, UiAutomation, UiNode, UiSelector, UiSnapshot, UiSnapshotOptions,
+};
 
 // --- 0.3.0 WP-B: frame diff and emergency stop (src/diff.rs, src/stop.rs; SPEC §7.3, §19) ---
 

@@ -489,6 +489,8 @@ pub struct Session {
     pause: Option<PauseLease>,
     /// Ctrl+Alt+F12 latch for this connection (SPEC §19).
     stop: StopLatch,
+    /// UI Automation client and element refs (`mcp/ui.rs`).
+    pub(super) ui: super::ui::UiState,
 }
 
 /// Tools that never send input or change windows; they keep working after
