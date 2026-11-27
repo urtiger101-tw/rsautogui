@@ -458,7 +458,7 @@ impl Session {
         }
         Ok(results)
     }
-    fn display(&self, key: &str) -> Result<Display> {
+    pub(super) fn display(&self, key: &str) -> Result<Display> {
         let display = self.displays.get(key).ok_or(Error::InvalidArgument(
             "unknown/stale display; call displays_list again",
         ))?;

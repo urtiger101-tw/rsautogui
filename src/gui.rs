@@ -60,7 +60,11 @@ impl AutoGui {
         self.raise_image_not_found = yes;
     }
 
+    /// Checks the emergency stop chord (Ctrl+Alt+F12) first, then the corner fail-safe.
     pub(crate) fn before_action(&self) -> Result<()> {
+        if self.settings.stop_key && crate::stop::chord_down() {
+            return Err(crate::error::Error::Stopped);
+        }
         let pos = self.backend.mouse_pos()?;
         failsafe::check(&self.settings, pos)
     }
