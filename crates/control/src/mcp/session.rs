@@ -395,6 +395,8 @@ pub struct Session {
     capture_generation: u64,
     capture: Option<CaptureProof>,
     pause: Option<PauseLease>,
+    /// UI Automation client and element refs (WP-A, `mcp/ui.rs`).
+    pub(super) ui: super::ui::UiState,
 }
 
 impl Session {
