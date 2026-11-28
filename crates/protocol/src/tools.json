@@ -205,6 +205,12 @@
             "height"
           ],
           "additionalProperties": false
+        },
+        "max_width": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 16384,
+          "description": "Downscale the returned PNG to at most this width (aspect kept) to save image tokens. Pointer coordinates are then pixels of the smaller image; the server maps them back. Omit for full resolution."
         }
       },
       "required": [
@@ -261,6 +267,22 @@
         "device_name": {
           "type": "string",
           "description": "Windows device name of the display."
+        },
+        "image": {
+          "type": "object",
+          "description": "Size of the returned PNG; pointer coordinates use it.",
+          "properties": {
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "scale": {
+          "type": "number",
+          "description": "image.width / region.width; below 1 when max_width downscaled the PNG."
         }
       },
       "additionalProperties": true
@@ -645,6 +667,12 @@
         "display": {
           "type": "string",
           "description": "Display reference from the latest displays_list in this connection; re-list after topology changes. Omit to use the primary monitor."
+        },
+        "max_width": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 16384,
+          "description": "Downscale the returned PNG to at most this width (aspect kept) to save image tokens. Pointer coordinates are then pixels of the smaller image; the server maps them back. Omit for full resolution."
         }
       },
       "required": [
@@ -704,6 +732,22 @@
         "target": {
           "type": "string",
           "description": "Window target captured (it was activated)."
+        },
+        "image": {
+          "type": "object",
+          "description": "Size of the returned PNG; pointer coordinates use it.",
+          "properties": {
+            "width": {
+              "type": "integer"
+            },
+            "height": {
+              "type": "integer"
+            }
+          }
+        },
+        "scale": {
+          "type": "number",
+          "description": "image.width / region.width; below 1 when max_width downscaled the PNG."
         }
       },
       "additionalProperties": true

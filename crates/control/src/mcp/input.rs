@@ -12,8 +12,23 @@ pub(super) struct CaptureProof {
     pub display: Option<String>,
     pub bounds: Rect,
     pub region: Rect,
+    /// Full-resolution pixels of `region`, used for the pre-input patch check.
     pub frame: Screenshot,
+    /// Size of the PNG the agent received; smaller than `region` when the
+    /// capture was downscaled with `max_width`. Pointer coordinates use it.
+    pub image: (i32, i32),
     pub taken: Instant,
+}
+
+/// Maps one image axis to the captured region: the centre of image pixel `v`
+/// lands in region pixel `floor((v + 0.5) * desktop / image)`, so an
+/// unscaled capture maps 1:1 and every image pixel stays inside the region.
+fn scale_axis(v: i32, image: i32, desktop: i32) -> i32 {
+    if image == desktop || image <= 0 {
+        return v;
+    }
+    let mapped = (2 * i64::from(v) + 1) * i64::from(desktop) / (2 * i64::from(image));
+    i32::try_from(mapped).unwrap_or(i32::MAX)
 }
 
 impl CaptureProof {
@@ -50,13 +65,20 @@ impl CaptureProof {
             ));
         }
         self.fresh()?;
-        if !Rect::new(0, 0, self.region.width, self.region.height).contains(x, y) {
+        let (image_width, image_height) = self.image;
+        if !Rect::new(0, 0, image_width, image_height).contains(x, y) {
             return Err(Error::InvalidArgument(
                 "point must be inside the captured image",
             ));
         }
-        let x = self.region.left.checked_add(x);
-        let y = self.region.top.checked_add(y);
+        let x = self
+            .region
+            .left
+            .checked_add(scale_axis(x, image_width, self.region.width));
+        let y = self
+            .region
+            .top
+            .checked_add(scale_axis(y, image_height, self.region.height));
         match (x, y) {
             (Some(x), Some(y)) if self.bounds.contains(x, y) => Ok(Point::new(x, y)),
             _ => Err(Error::InvalidArgument(
@@ -239,6 +261,7 @@ mod tests {
             bounds: Rect::new(-100, 50, 100, 80),
             region: Rect::new(-100, 50, 100, 80),
             frame: Screenshot::solid(100, 80, Rgb::new(1, 2, 3)),
+            image: (100, 80),
             taken: Instant::now(),
         }
     }
@@ -282,8 +305,29 @@ mod tests {
             bounds: Rect::new(1920, -200, 300, 200),
             region: Rect::new(1920, -200, 300, 200),
             frame: Screenshot::solid(300, 200, Rgb::new(1, 2, 3)),
+            image: (300, 200),
             taken: Instant::now(),
         }
+    }
+
+    #[test]
+    fn downscaled_proof_maps_image_pixels_into_the_region() {
+        // A 300x200 region returned as a 100x67 image (max_width 100).
+        let mut d = display_proof();
+        d.image = (100, 67);
+        let at = |x, y| d.point(None, Some("d1-0"), "c2", x, y);
+        assert_eq!(at(0, 0).unwrap(), Point::new(1921, -199));
+        assert_eq!(at(50, 33).unwrap(), Point::new(2071, -100));
+        assert_eq!(at(99, 66).unwrap(), Point::new(2218, -2));
+        for (x, y) in [(100, 0), (0, 67), (-1, 0), (299, 199)] {
+            assert!(matches!(at(x, y), Err(Error::InvalidArgument(_))));
+        }
+        for v in 0..100 {
+            let mapped = scale_axis(v, 100, 300);
+            assert!((0..300).contains(&mapped));
+            assert!(mapped >= scale_axis(v.saturating_sub(1), 100, 300));
+        }
+        assert_eq!(scale_axis(7, 300, 300), 7);
     }
 
     #[test]
