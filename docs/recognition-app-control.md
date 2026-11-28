@@ -78,7 +78,7 @@ drop(held); // 反序釋放修飾鍵
 
 ## MCP 截圖座標操作與長文字
 
-`capture {target,display?}` 回傳 PNG、桌面範圍 `region` 與 `capture_id`。觀察圖片後可直接呼叫：
+`capture {target,display?,max_width?}` 回傳 PNG、桌面範圍 `region`、圖片尺寸 `image`、縮放比 `scale` 與 `capture_id`。`max_width`（256–16384）會等比例縮小回傳的 PNG，以節省模型的圖片 token；`display_capture` 也支援此參數。縮小後指標工具仍使用縮小後 PNG 的座標，伺服器會換算回桌面像素，32×32 像素檢查仍以原解析度進行。小而密集的目標請用原解析度。觀察圖片後可直接呼叫：
 
 ```json
 {"name":"click_at","arguments":{"target":"w1-0","capture_id":"c1","x":120,"y":80}}

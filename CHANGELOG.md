@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- MCP `capture` and `display_capture` take an optional `max_width` (256–16384) that downscales the returned PNG, keeping its aspect ratio, to cut image tokens and model latency. Results also report `image` (returned size) and `scale`. Pointer coordinates stay relative to the returned PNG and are mapped back to desktop pixels. The proof's 32×32 pixel check still uses the full-resolution frame.
+
+### Changed
+
+- Skill: a **Speed** section. Tool calls take about 0.1 s and most of a task's time is the model's turn between calls, so the Skill now says to keep `run` `settle_ms` at 100–300 and wait with `wait_change` / `ui_wait`, to use the hover form (`pointer_move` + `capture`) only when it is needed, and to use `max_width` or a `region` for large captures.
+
 ## 0.3.0 — 2026-11-28
 
 Features compared against Antigravity Computer Use: accessibility-tree control, change waits, batches, path strokes, clipboard entry and a one-chord emergency stop.

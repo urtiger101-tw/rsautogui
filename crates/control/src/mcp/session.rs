@@ -70,6 +70,47 @@ fn png(frame: Screenshot, metadata: Value) -> Result<Value> {
         "structuredContent":metadata,"isError":false}),
     )
 }
+/// Accepted `max_width` range for `capture` and `display_capture`.
+const MAX_WIDTH_RANGE: std::ops::RangeInclusive<u32> = 256..=16_384;
+
+/// Rejects an out-of-range `max_width` before a capture has any effect.
+fn check_max_width(max_width: Option<u32>) -> Result<()> {
+    match max_width {
+        Some(w) if !MAX_WIDTH_RANGE.contains(&w) => {
+            Err(Error::InvalidArgument("max_width must be 256..16384"))
+        }
+        _ => Ok(()),
+    }
+}
+fn to_i32(v: u32) -> Result<i32> {
+    i32::try_from(v).map_err(|_| Error::InvalidArgument("image dimensions overflow"))
+}
+/// The image returned to the agent: `frame` itself, or a copy at most
+/// `max_width` wide with the aspect ratio kept. The proof keeps the
+/// full-resolution frame for its pixel checks.
+fn agent_image(frame: &Screenshot, max_width: Option<u32>) -> Result<Screenshot> {
+    check_max_width(max_width)?;
+    let Some(max_width) = max_width.filter(|&w| frame.width > w) else {
+        return Ok(frame.clone());
+    };
+    let height = (u64::from(frame.height) * u64::from(max_width) + u64::from(frame.width) / 2)
+        / u64::from(frame.width);
+    let height = u32::try_from(height.max(1))
+        .map_err(|_| Error::InvalidArgument("image dimensions overflow"))?;
+    let source = image::ImageBuffer::<image::Rgb<u8>, &[u8]>::from_raw(
+        frame.width,
+        frame.height,
+        frame.pixels.as_slice(),
+    )
+    .ok_or(Error::InvalidArgument("invalid frame"))?;
+    let scaled = image::imageops::thumbnail(&source, max_width, height);
+    Screenshot::new(max_width, height, scaled.into_raw())
+}
+/// Image size and scale metadata shared by both capture tools.
+fn image_metadata(metadata: &mut Value, image: &Screenshot, region: Rect) {
+    metadata["image"] = json!({"width":image.width,"height":image.height});
+    metadata["scale"] = json!(f64::from(image.width) / f64::from(region.width.max(1)));
+}
 fn info(window: &Window) -> Result<Value> {
     Ok(
         json!({"hwnd":window.hwnd().to_string(),"title":window.title()?,"rect":rect(window.box_rect()?),
@@ -110,6 +151,7 @@ struct AppLaunch {
 struct Target {
     target: String,
     display: Option<String>,
+    max_width: Option<u32>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -127,6 +169,7 @@ struct CaptureRect {
 struct DisplayCapture {
     display: String,
     region: Option<CaptureRect>,
+    max_width: Option<u32>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -708,19 +751,21 @@ impl Session {
                         "capture region must be positive and at most 16 megapixels",
                     ));
                 }
+                check_max_width(a.max_width)?;
                 check()?;
                 let frame = self.gui()?.screenshot_display_region(&display, region)?;
                 check()?;
+                let image = agent_image(&frame, a.max_width)?;
                 self.capture_generation = self
                     .capture_generation
                     .checked_add(1)
                     .ok_or(Error::InvalidArgument("restart session"))?;
                 let id = format!("c{}", self.capture_generation);
                 let taken = Instant::now();
-                let output = png(
-                    frame.clone(),
-                    json!({"display":a.display,"device_name":display.name(),"region":rect(region),"coordinates":"windows desktop physical pixels","capture_id":id,"pointer_coordinates":"image-relative pixels; origin at captured image top-left; use with display (not target)","expires_in_seconds":60,"single_use":true}),
-                )?;
+                let mut metadata = json!({"display":a.display,"device_name":display.name(),"region":rect(region),"coordinates":"windows desktop physical pixels","capture_id":id,"pointer_coordinates":"image-relative pixels of the returned PNG; origin at its top-left; use with display (not target)","expires_in_seconds":60,"single_use":true});
+                image_metadata(&mut metadata, &image, region);
+                let size = (to_i32(image.width)?, to_i32(image.height)?);
+                let output = png(image, metadata)?;
                 // Screen-level proof: no window, bounds are the captured region.
                 self.capture = Some(CaptureProof {
                     id,
@@ -729,6 +774,7 @@ impl Session {
                     bounds: region,
                     region,
                     frame,
+                    image: size,
                     taken,
                 });
                 Ok(output)
@@ -857,6 +903,7 @@ impl Session {
             }
             "capture" => {
                 let a: Target = decode(args)?;
+                check_max_width(a.max_width)?;
                 let display = a
                     .display
                     .as_deref()
@@ -880,16 +927,17 @@ impl Session {
                     return Err(Error::InvalidArgument("window moved during capture; retry"));
                 }
                 check()?;
+                let image = agent_image(&frame, a.max_width)?;
                 self.capture_generation = self
                     .capture_generation
                     .checked_add(1)
                     .ok_or(Error::InvalidArgument("restart session"))?;
                 let id = format!("c{}", self.capture_generation);
                 let taken = Instant::now();
-                let output = png(
-                    frame.clone(),
-                    json!({"target":a.target,"display":a.display,"region":rect(region),"coordinates":"windows desktop physical pixels","capture_id":id,"pointer_coordinates":"image-relative pixels; origin at captured image top-left","expires_in_seconds":60,"single_use":true}),
-                )?;
+                let mut metadata = json!({"target":a.target,"display":a.display,"region":rect(region),"coordinates":"windows desktop physical pixels","capture_id":id,"pointer_coordinates":"image-relative pixels of the returned PNG; origin at its top-left","expires_in_seconds":60,"single_use":true});
+                image_metadata(&mut metadata, &image, region);
+                let size = (to_i32(image.width)?, to_i32(image.height)?);
+                let output = png(image, metadata)?;
                 self.capture = Some(CaptureProof {
                     id,
                     target: Some(a.target),
@@ -897,6 +945,7 @@ impl Session {
                     bounds,
                     region,
                     frame,
+                    image: size,
                     taken,
                 });
                 Ok(output)
@@ -1313,6 +1362,7 @@ mod tests {
                 bounds: Rect::new(10, 10, 20, 20),
                 region: Rect::new(10, 10, 20, 20),
                 frame: Screenshot::solid(20, 20, autogui::Rgb::new(1, 2, 3)),
+                image: (20, 20),
                 taken: Instant::now(),
             }),
             ..Default::default()
@@ -1870,6 +1920,29 @@ mod tests {
         let mut bad = frame;
         bad.pixels.pop();
         assert!(png(bad, json!({})).is_err());
+    }
+
+    #[test]
+    fn max_width_downscales_only_wider_frames_and_rejects_bad_values() {
+        let frame = synthetic_frame(1000, 601);
+        assert_eq!(agent_image(&frame, None).unwrap(), frame);
+        assert_eq!(agent_image(&frame, Some(1000)).unwrap(), frame);
+        assert_eq!(agent_image(&frame, Some(4096)).unwrap(), frame);
+        let small = agent_image(&frame, Some(500)).unwrap();
+        assert_eq!((small.width, small.height), (500, 301));
+        assert_eq!(small.pixels.len(), 500 * 301 * 3);
+        for bad in [0, 255, 16_385] {
+            assert!(matches!(
+                agent_image(&frame, Some(bad)),
+                Err(Error::InvalidArgument(_))
+            ));
+            assert!(check_max_width(Some(bad)).is_err());
+        }
+        assert!(check_max_width(None).is_ok());
+        let mut metadata = json!({});
+        image_metadata(&mut metadata, &small, Rect::new(0, 0, 1000, 601));
+        assert_eq!(metadata["image"], json!({"width":500,"height":301}));
+        assert_eq!(metadata["scale"], json!(0.5));
     }
 
     /// cargo test --release -p autogui-control-core png_encode_bench -- --ignored --nocapture
